@@ -8,14 +8,18 @@
 //! `joshuaswarren/pyskylight` commit `69e4576b9035d71aacda9ade7a4afea05a663e94` (MIT). See
 //! `../THIRD_PARTY_NOTICES.md`. This is a native Rust reimplementation; Python is not embedded.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, HashSet};
+use std::{fmt, marker::PhantomData};
 
 use dekopon_provider_http::{Header, HttpError, Request, Response, method};
 use dekopon_provider_sdk::{
-    CapabilityId, EffectKind, Idempotency, Provider, ProviderApiVersion, ProviderCapability,
-    ProviderError, ProviderManifest, RiskLevel,
+    CapabilityId, ComponentFailure, ComponentResponse, EffectKind, Idempotency, Provider,
+    ProviderApiVersion, ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{MapAccess, SeqAccess, Visitor, value::MapAccessDeserializer},
+};
 use serde_json::{Value, json};
 
 const ACCOUNT_CAPABILITY: &str = "skylight.private.account.read";
@@ -149,8 +153,8 @@ where
     validate_empty_input(input)?;
     let body = send_once(ACCOUNT_URI, send)?;
     let envelope = decode_account(&body)?;
-    validate_id(&envelope.data.id)?;
-    bounded_output(json!({"account": {"id": envelope.data.id}}))
+    validate_id(&envelope.data.0.id)?;
+    bounded_output(json!({"account": {"id": envelope.data.0.id}}))
 }
 
 fn list_frames<F>(input: Value, send: F) -> Result<Value, ProviderError>
@@ -195,9 +199,47 @@ fn header(name: &'static str, value: &'static str) -> Result<Header, ProviderErr
     Header::text(name, value).map_err(|_| invalid_request())
 }
 
+/// Forces JSON object syntax while still delegating field-level duplicate detection and unknown
+/// field discarding to serde's derived map visitor. Derived structs also accept positional arrays;
+/// wrapping every API object closes that otherwise-surprising representation.
+#[derive(Debug, Default)]
+struct JsonObject<T>(T);
+
+impl<'de, T> Deserialize<'de> for JsonObject<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct JsonObjectVisitor<T>(PhantomData<T>);
+
+        impl<'de, T> Visitor<'de> for JsonObjectVisitor<T>
+        where
+            T: Deserialize<'de>,
+        {
+            type Value = JsonObject<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                T::deserialize(MapAccessDeserializer::new(map)).map(JsonObject)
+            }
+        }
+
+        deserializer.deserialize_map(JsonObjectVisitor(PhantomData))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AccountEnvelope {
-    data: IdentityResource,
+    data: JsonObject<IdentityResource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,19 +249,15 @@ struct IdentityResource {
 
 #[derive(Debug, Deserialize)]
 struct FramesEnvelope {
-    data: Vec<FrameResource>,
+    data: FrameResources,
 }
 
 #[derive(Debug, Deserialize)]
 struct FrameResource {
     id: String,
     /// Missing attributes mean an unnamed frame; a present non-object is invalid.
-    #[serde(default = "empty_attributes")]
-    attributes: Value,
-}
-
-fn empty_attributes() -> Value {
-    Value::Object(Default::default())
+    #[serde(default)]
+    attributes: JsonObject<FrameAttributes>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -253,23 +291,77 @@ struct FramesOutput<'a> {
     truncated: bool,
 }
 
-fn project_frames(resources: Vec<FrameResource>) -> Result<Value, ProviderError> {
-    let mut seen = BTreeSet::new();
-    let mut frames = Vec::with_capacity(resources.len());
-    for resource in resources {
-        validate_id(&resource.id)?;
-        if !seen.insert(resource.id.clone()) {
-            return Err(invalid_response());
+/// Streaming frame-array projection. Every resource is fully deserialized and every ID is retained
+/// in `seen` for exact duplicate detection, but only the 32 lexicographically smallest projected
+/// records survive. This avoids materializing and sorting an attacker-sized response array.
+#[derive(Debug)]
+struct FrameResources {
+    smallest: BTreeMap<String, ProjectedFrame>,
+    total: usize,
+}
+
+impl<'de> Deserialize<'de> for FrameResources {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FrameResourcesVisitor;
+
+        impl<'de> Visitor<'de> for FrameResourcesVisitor {
+            type Value = FrameResources;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an array of Skylight frame resources")
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut seen = HashSet::new();
+                let mut smallest = BTreeMap::new();
+                let mut total = 0usize;
+
+                while let Some(JsonObject(resource)) =
+                    sequence.next_element::<JsonObject<FrameResource>>()?
+                {
+                    if resource.id.is_empty() || resource.id.len() > MAX_ID_BYTES {
+                        return Err(serde::de::Error::custom("invalid frame identifier"));
+                    }
+                    if !seen.insert(resource.id.clone()) {
+                        return Err(serde::de::Error::custom("duplicate frame identifier"));
+                    }
+                    total = total
+                        .checked_add(1)
+                        .ok_or_else(|| serde::de::Error::custom("too many frame resources"))?;
+
+                    let should_retain = smallest.len() < MAX_FRAMES
+                        || smallest
+                            .last_key_value()
+                            .is_some_and(|(largest, _)| resource.id < *largest);
+                    if should_retain {
+                        let projected = resource.into_projected();
+                        smallest.insert(projected.id.clone(), projected);
+                        if smallest.len() > MAX_FRAMES {
+                            smallest.pop_last();
+                        }
+                    }
+                }
+
+                Ok(FrameResources { smallest, total })
+            }
         }
-        if !resource.attributes.is_object() {
-            return Err(invalid_response());
-        }
-        let attributes = serde_json::from_value::<FrameAttributes>(resource.attributes)
-            .map_err(|_| invalid_response())?;
-        let selected_name = attributes
-            .name
+
+        deserializer.deserialize_seq(FrameResourcesVisitor)
+    }
+}
+
+impl FrameResource {
+    fn into_projected(self) -> ProjectedFrame {
+        let FrameAttributes { name, label } = self.attributes.0;
+        let selected_name = name
             .filter(|name| !name.is_empty())
-            .or_else(|| attributes.label.filter(|label| !label.is_empty()));
+            .or_else(|| label.filter(|label| !label.is_empty()));
         let (name, name_truncated) = match selected_name {
             Some(name) => {
                 let (name, truncated) = truncate_name(&name);
@@ -277,17 +369,18 @@ fn project_frames(resources: Vec<FrameResource>) -> Result<Value, ProviderError>
             }
             None => (None, false),
         };
-        frames.push(ProjectedFrame {
-            id: resource.id,
+        ProjectedFrame {
+            id: self.id,
             name,
             name_truncated,
-        });
+        }
     }
+}
 
-    frames.sort_by(|left, right| left.id.cmp(&right.id));
-    let total = frames.len();
-    let mut selected = Vec::with_capacity(total.min(MAX_FRAMES));
-    for frame in frames.into_iter().take(MAX_FRAMES) {
+fn project_frames(resources: FrameResources) -> Result<Value, ProviderError> {
+    let total = resources.total;
+    let mut selected = Vec::with_capacity(resources.smallest.len());
+    for frame in resources.smallest.into_values() {
         selected.push(frame);
         let records_remain = selected.len() < total;
         if serialized_frames_len(&selected, records_remain)? > MAX_PROJECTED_OUTPUT_BYTES {
@@ -333,26 +426,19 @@ fn validate_id(id: &str) -> Result<(), ProviderError> {
 }
 
 fn decode_account(body: &[u8]) -> Result<AccountEnvelope, ProviderError> {
-    let value = decode_value(body)?;
-    if !value.is_object() || !value.get("data").is_some_and(Value::is_object) {
-        return Err(invalid_response());
-    }
-    serde_json::from_value(value).map_err(|_| invalid_response())
+    // Decode directly so serde's generated map visitors reject duplicate known members instead of
+    // allowing `Value`'s last-member-wins behavior to hide malformed data.
+    serde_json::from_slice::<JsonObject<AccountEnvelope>>(body)
+        .map(|object| object.0)
+        .map_err(|_| invalid_response())
 }
 
 fn decode_frames(body: &[u8]) -> Result<FramesEnvelope, ProviderError> {
-    let value = decode_value(body)?;
-    let Some(data) = value.get("data").and_then(Value::as_array) else {
-        return Err(invalid_response());
-    };
-    if !value.is_object() || data.iter().any(|resource| !resource.is_object()) {
-        return Err(invalid_response());
-    }
-    serde_json::from_value(value).map_err(|_| invalid_response())
-}
-
-fn decode_value(body: &[u8]) -> Result<Value, ProviderError> {
-    serde_json::from_slice(body).map_err(|_| invalid_response())
+    // `FrameResources` consumes the array incrementally; all parse and visitor detail collapses to
+    // the single stable invalid-response failure at this boundary.
+    serde_json::from_slice::<JsonObject<FramesEnvelope>>(body)
+        .map(|object| object.0)
+        .map_err(|_| invalid_response())
 }
 
 fn bounded_output(output: Value) -> Result<Value, ProviderError> {
@@ -410,7 +496,52 @@ fn invalid_response() -> ProviderError {
     )
 }
 
-dekopon_provider_sdk::export_provider_with_bindings!(SkylightPrivate, bindings);
+fn failed_component_response(error: ProviderError) -> ComponentResponse {
+    ComponentResponse::Failed {
+        error: ComponentFailure {
+            code: error.code().to_owned(),
+            message: error.message().to_owned(),
+        },
+    }
+}
+
+fn invoke_component(capability: &str, input_json: &str) -> ComponentResponse {
+    // Match the two immutable wire capabilities before looking at input. This deliberately treats
+    // malformed capability syntax as unknown and preserves unknown-capability precedence over JSON
+    // parsing and exact-empty-object validation.
+    if !matches!(capability, ACCOUNT_CAPABILITY | FRAMES_CAPABILITY) {
+        return failed_component_response(unknown_capability());
+    }
+
+    let input = match serde_json::from_str::<Value>(input_json) {
+        Ok(input) => input,
+        Err(_) => return failed_component_response(invalid_input()),
+    };
+    let capability = capability
+        .parse::<CapabilityId>()
+        .expect("the two matched static capability IDs are valid");
+    match SkylightPrivate::invoke(&capability, input) {
+        Ok(output) => ComponentResponse::Succeeded { output },
+        Err(error) => failed_component_response(error),
+    }
+}
+
+struct SkylightPrivateComponent;
+
+impl bindings::Guest for SkylightPrivateComponent {
+    fn describe() -> String {
+        dekopon_provider_sdk::__describe::<SkylightPrivate>()
+    }
+
+    fn invoke(capability: String, input_json: String) -> String {
+        // Strings and serde_json::Value have no fallible JSON representation. Unlike the generic
+        // SDK shim, this boundary cannot emit parser detail or an unlisted serialization failure.
+        serde_json::to_string(&invoke_component(&capability, &input_json))
+            .expect("ComponentResponse always has a JSON representation")
+    }
+}
+
+bindings::export!(SkylightPrivateComponent with_types_in bindings);
 
 #[cfg(test)]
 mod tests {
@@ -1113,5 +1244,58 @@ mod tests {
         let decoded: dekopon_provider_sdk::ComponentResponse =
             serde_json::from_slice(&encoded).expect("the SDK response round-trips");
         assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn duplicate_known_response_members_fail_closed() {
+        let fixtures: [(&str, &[u8]); 8] = [
+            (
+                ACCOUNT_CAPABILITY,
+                br#"{"data":{"id":"first","id":"accepted"}}"#,
+            ),
+            (
+                ACCOUNT_CAPABILITY,
+                br#"{"data":{"id":null,"id":"accepted"}}"#,
+            ),
+            (
+                ACCOUNT_CAPABILITY,
+                br#"{"data":{"id":"first"},"data":{"id":"accepted"}}"#,
+            ),
+            (
+                FRAMES_CAPABILITY,
+                br#"{"data":[],"data":[{"id":"accepted"}]}"#,
+            ),
+            (
+                FRAMES_CAPABILITY,
+                br#"{"data":[{"id":"first","id":"accepted"}]}"#,
+            ),
+            (
+                FRAMES_CAPABILITY,
+                br#"{"data":[{"id":"frame","attributes":{},"attributes":{"name":"accepted"}}]}"#,
+            ),
+            (
+                FRAMES_CAPABILITY,
+                br#"{"data":[{"id":"frame","attributes":{"name":null,"name":"accepted"}}]}"#,
+            ),
+            (
+                FRAMES_CAPABILITY,
+                br#"{"data":[{"id":"frame","attributes":{"label":"accepted","label":null}}]}"#,
+            ),
+        ];
+
+        for (capability_id, body) in fixtures {
+            let calls = Cell::new(0);
+            let error = invoke_with(&capability(capability_id), json!({}), |_| {
+                calls.set(calls.get() + 1);
+                Ok(raw_response(200, body))
+            })
+            .expect_err("a duplicate known response member must fail closed");
+            assert_eq!(calls.get(), 1);
+            assert_eq!(error.code(), "invalid-response");
+            assert_eq!(
+                error.message(),
+                "the private API returned an invalid response"
+            );
+        }
     }
 }

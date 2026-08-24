@@ -22,22 +22,27 @@ an in-memory implementation of its sole WIT import.
 
 ## Measured headroom
 
-Measurements below came from the pinned Rust 1.89.0 / wasm-tools 1.236.1 standalone build and the
-synthetic worst-case component-host test before the migration commit. They are not production
-capacity claims. Time is machine-dependent; byte, memory-page, and fuel measurements are pinned by
-the test.
+Measurements below came from the pinned Rust 1.89.0 / wasm-tools 1.236.1 revision build and its
+socket-free in-memory component host. They are not production capacity claims. Time is
+machine-dependent; byte, memory-page, and fuel measurements are pinned by the tests.
 
 | Measurement | Observed | Headroom to committed ceiling |
 |---|---:|---:|
-| Composed component bytes | 295,850 bytes | 97,366 bytes |
+| Composed component bytes | 291,152 bytes | 102,064 bytes |
 | Worst-case actual SDK frame envelope (13 whole records retained) | 30,430 bytes | 2,338 bytes |
-| Peak guest memory requested in the in-memory host | 1,310,720 bytes | 32,243,712 bytes |
-| Fuel consumed by instantiate + describe + account + worst-case frames | 8,412,897 | 119,587,103 |
-| In-memory test elapsed time | 3 ms | 9,997 ms |
-| Synthetic worst-case response body | 78,986 bytes | 183,158 bytes |
+| Near-limit valid SDK envelope (32 smallest records retained) | 1,182 bytes | 31,586 bytes |
+| Near-limit valid response body | 260,010 bytes | 2,134 bytes |
+| Near-limit malformed-last response body | 260,049 bytes | 2,095 bytes |
+| Peak guest memory requested by either near-limit probe | 2,359,296 bytes | 31,195,136 bytes |
+| Fuel: near-limit valid response | 64,652,737 | 63,347,263 |
+| Fuel: near-limit malformed-last duplicate | 71,150,193 | 56,849,807 |
+| In-memory near-limit test elapsed time | 2,907 ms | 7,093 ms |
 
-The response fixture is generated in memory from synthetic control-character-heavy IDs and names;
-it is not captured Skylight data. Whole frame records are omitted before the SDK envelope can reach
-32,768 bytes. Host allocations outside guest linear memory are not represented by the guest-memory
-measurement, so the 32 MiB value remains a hard Wasmtime ceiling rather than a general process-RSS
-claim.
+The smaller output-budget fixture is generated in memory from synthetic control-character-heavy IDs
+and names. The near-limit probes generate 20,000 unique three-byte UTF-8 IDs in a deterministic
+permutation; the hostile variant puts duplicate known `name` members in the final record. None is
+captured Skylight data. The guest validates every record and tracks every ID for duplicate detection,
+but retains only the 32 smallest projected records. Whole frame records are omitted before the SDK
+envelope can reach 32,768 bytes. Host allocations outside guest linear memory are not represented by
+the guest-memory measurement, so the 32 MiB value remains a hard Wasmtime ceiling rather than a
+general process-RSS claim.

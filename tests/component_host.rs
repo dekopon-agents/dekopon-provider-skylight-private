@@ -1,10 +1,11 @@
 use std::{
+    io::Write,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
 use dekopon_provider_host::{HostLimits, ProviderHostError, ProviderRegistry};
-use dekopon_provider_sdk::ComponentResponse;
+use dekopon_provider_sdk::{ComponentFailure, ComponentResponse};
 use serde_json::json;
 use wasmtime::{
     Config, Engine, ResourceLimiter, Store,
@@ -19,6 +20,7 @@ const MAX_REQUEST_BYTES: usize = 4_096;
 const MAX_RESPONSE_BYTES: usize = 262_144;
 const MAX_OUTPUT_BYTES: usize = 32_768;
 const TIMEOUT: Duration = Duration::from_secs(10);
+const NEAR_LIMIT_FRAME_COUNT: usize = 20_000;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -124,6 +126,37 @@ fn worst_case_frame_body() -> Vec<u8> {
     serde_json::to_vec(&json!({"data": data})).expect("frame response serializes")
 }
 
+/// Produces the 260,010-byte review probe without a fixture or random dependency. Multiplication by
+/// 7,919 permutes all 20,000 indices, and each selected scalar is exactly three UTF-8 bytes.
+fn near_limit_frame_body(malformed_last: bool) -> Vec<u8> {
+    let mut body = Vec::with_capacity(MAX_RESPONSE_BYTES);
+    body.extend_from_slice(br#"{"data":["#);
+    for position in 0..NEAR_LIMIT_FRAME_COUNT {
+        if position != 0 {
+            body.push(b',');
+        }
+        let index = (position * 7_919 + 1_237) % NEAR_LIMIT_FRAME_COUNT;
+        let id = char::from_u32(0x0800 + index as u32).expect("fixture scalar is valid");
+        if malformed_last && position + 1 == NEAR_LIMIT_FRAME_COUNT {
+            write!(
+                &mut body,
+                r#"{{"id":"{id}","attributes":{{"name":"ok","name":null}}}}"#
+            )
+            .expect("writing to a byte vector succeeds");
+        } else {
+            write!(&mut body, r#"{{"id":"{id}"}}"#).expect("writing to a byte vector succeeds");
+        }
+    }
+    body.extend_from_slice(b"]}");
+    if malformed_last {
+        assert_eq!(body.len(), 260_049);
+    } else {
+        assert_eq!(body.len(), 260_010);
+    }
+    assert!(body.len() <= MAX_RESPONSE_BYTES);
+    body
+}
+
 fn response(body: Vec<u8>) -> Response {
     assert!(body.len() <= MAX_RESPONSE_BYTES);
     Response {
@@ -134,6 +167,31 @@ fn response(body: Vec<u8>) -> Response {
         }],
         body,
     }
+}
+
+fn instantiate(response: Response) -> (Store<State>, bindings::Provider) {
+    let path = component_path();
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    let engine = Engine::new(&config).expect("component engine configures");
+    let component = Component::from_file(&engine, &path).expect("component compiles");
+    let mut linker = Linker::new(&engine);
+    bindings::Provider::add_to_linker::<_, HasSelf<_>>(&mut linker, |state: &mut State| state)
+        .expect("sole HTTP import links");
+    let mut store = Store::new(
+        &engine,
+        State {
+            limits: Limits::default(),
+            requests: Vec::new(),
+            response,
+        },
+    );
+    store.limiter(|state| &mut state.limits);
+    store.set_fuel(MAX_FUEL).expect("fuel is configured");
+    let provider = bindings::Provider::instantiate(&mut store, &component, &linker)
+        .expect("component instantiates with only the in-memory HTTP host");
+    (store, provider)
 }
 
 fn assert_request(request: &Request, uri: &str) {
@@ -289,6 +347,140 @@ fn in_memory_sole_wit_host_preserves_requests_and_worst_case_projection() {
         frame_body_bytes,
         frames.len(),
         projected.len(),
+        store.data().limits.peak_memory_bytes,
+        fuel_consumed,
+        started.elapsed().as_millis(),
+    );
+}
+
+#[test]
+fn component_boundary_pins_unknown_precedence_and_malformed_json() {
+    let (mut store, provider) = instantiate(response(account_body()));
+    let cases = [
+        (
+            "skylight.private.unknown",
+            "{not-json",
+            "unknown-capability",
+            "unsupported Skylight private capability",
+        ),
+        (
+            "not a capability",
+            "[also-not-json",
+            "unknown-capability",
+            "unsupported Skylight private capability",
+        ),
+        (
+            "skylight.private.account.read",
+            "{not-json",
+            "invalid-input",
+            "input must be exactly an empty object",
+        ),
+        (
+            "skylight.private.frames.list",
+            r#"{"endpoint":"caller-controlled.invalid"}"#,
+            "invalid-input",
+            "input must be exactly an empty object",
+        ),
+    ];
+
+    for (capability, input, code, message) in cases {
+        let encoded = provider
+            .call_invoke(&mut store, capability, input)
+            .expect("boundary refusal returns rather than traps");
+        assert_eq!(
+            serde_json::from_str::<ComponentResponse>(&encoded)
+                .expect("boundary response is an SDK envelope"),
+            ComponentResponse::Failed {
+                error: ComponentFailure {
+                    code: code.to_owned(),
+                    message: message.to_owned(),
+                }
+            }
+        );
+    }
+    assert!(
+        store.data().requests.is_empty(),
+        "wire-level capability and input failures must precede HTTP"
+    );
+}
+
+#[test]
+fn near_limit_random_order_projects_within_committed_fuel() {
+    let body = near_limit_frame_body(false);
+    let response_bytes = body.len();
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let encoded = provider
+        .call_invoke(&mut store, "skylight.private.frames.list", "{}")
+        .expect("near-limit valid response must not trap");
+    let ComponentResponse::Succeeded { output } =
+        serde_json::from_str::<ComponentResponse>(&encoded).expect("SDK envelope decodes")
+    else {
+        panic!("near-limit valid response unexpectedly failed");
+    };
+
+    let frames = output["frames"].as_array().expect("frames are projected");
+    assert_eq!(frames.len(), 32);
+    for (index, frame) in frames.iter().enumerate() {
+        let expected = char::from_u32(0x0800 + index as u32)
+            .expect("expected scalar is valid")
+            .to_string();
+        assert_eq!(frame["id"], expected);
+        assert_eq!(frame["nameTruncated"], false);
+    }
+    assert_eq!(output["truncated"], true);
+    assert!(encoded.len() < MAX_OUTPUT_BYTES);
+    assert_eq!(store.data().requests.len(), 1);
+    assert_request(
+        &store.data().requests[0],
+        "https://app.ourskylight.com/api/frames",
+    );
+    assert!(started.elapsed() < TIMEOUT);
+    let fuel_consumed = MAX_FUEL - store.get_fuel().expect("fuel remains readable");
+    assert!(fuel_consumed > 0 && fuel_consumed < MAX_FUEL);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    eprintln!(
+        "measured near-limit valid response: response={} envelope={} records={} peak-memory={} fuel={} elapsed-ms={}",
+        response_bytes,
+        encoded.len(),
+        frames.len(),
+        store.data().limits.peak_memory_bytes,
+        fuel_consumed,
+        started.elapsed().as_millis(),
+    );
+}
+
+#[test]
+fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
+    let body = near_limit_frame_body(true);
+    let response_bytes = body.len();
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let encoded = provider
+        .call_invoke(&mut store, "skylight.private.frames.list", "{}")
+        .expect("near-limit malformed response must return rather than trap");
+    assert_eq!(
+        serde_json::from_str::<ComponentResponse>(&encoded).expect("SDK envelope decodes"),
+        ComponentResponse::Failed {
+            error: ComponentFailure {
+                code: "invalid-response".to_owned(),
+                message: "the private API returned an invalid response".to_owned(),
+            }
+        }
+    );
+    assert_eq!(store.data().requests.len(), 1);
+    assert_request(
+        &store.data().requests[0],
+        "https://app.ourskylight.com/api/frames",
+    );
+    assert!(started.elapsed() < TIMEOUT);
+    let fuel_consumed = MAX_FUEL - store.get_fuel().expect("fuel remains readable");
+    assert!(fuel_consumed > 0 && fuel_consumed < MAX_FUEL);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    eprintln!(
+        "measured near-limit malformed-last response: response={} envelope={} peak-memory={} fuel={} elapsed-ms={}",
+        response_bytes,
+        encoded.len(),
         store.data().limits.peak_memory_bytes,
         fuel_consumed,
         started.elapsed().as_millis(),

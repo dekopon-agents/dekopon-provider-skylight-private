@@ -140,6 +140,18 @@ for forbidden in ("workflow_dispatch", "workflow_call", "branches:"):
         raise SystemExit(f"error: dormant release workflow contains forbidden trigger {forbidden}")
 if "tags:\n      - \"v0.1.0\"" not in release:
     raise SystemExit("error: release trigger is not the exact future v0.1.0 tag")
+if release.count("git fetch --force origin") != 3:
+    raise SystemExit("error: every release job must force-fetch the annotated tag object")
+if release.count("contents: write") != 1 or release.count("packages: write") != 1:
+    raise SystemExit("error: draft and GHCR publication permissions must remain split")
+for invariant in [
+    "needs:\n      - gates\n      - draft",
+    "indeterminate GHCR lookup; refusing to publish",
+    "remote manifest differs from the exact deterministic manifest",
+    "verified-assets.tsv",
+]:
+    if invariant not in release:
+        raise SystemExit(f"error: idempotent release invariant is missing: {invariant}")
 PY
 
 if grep -REn --include='Cargo.toml' --include='Cargo.lock' \
