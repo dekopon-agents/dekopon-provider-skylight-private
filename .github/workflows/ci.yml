@@ -94,7 +94,9 @@ jobs:
         shell: bash
         env:
           DEKOPON_SKYLIGHT_COMPONENT: ${{ github.workspace }}/dist/provider-skylight-private.wasm
-        run: cargo test --locked --test broker_host --test component_host -- --nocapture
+        # Serialize the CPU-budget probes so concurrent Wasmtime compilations cannot consume each
+        # other's committed ten-second wall-clock allowance on two-core hosted runners.
+        run: cargo test --locked --test broker_host --test component_host -- --nocapture --test-threads=1
 
       - name: Independently pin immediate-host refusal
         run: scripts/test-direct-refusal.sh

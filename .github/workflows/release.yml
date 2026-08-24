@@ -94,8 +94,9 @@ jobs:
         run: |
           ./build.sh
           scripts/verify-component.sh
+          # Keep CPU-budget probes serial so each gets the full committed wall-clock allowance.
           DEKOPON_SKYLIGHT_COMPONENT="$PWD/dist/provider-skylight-private.wasm" \
-            cargo test --locked --test broker_host --test component_host -- --nocapture
+            cargo test --locked --test broker_host --test component_host -- --nocapture --test-threads=1
           scripts/test-direct-refusal.sh
           scripts/generate-sbom.sh
           scripts/check-reproducible.sh

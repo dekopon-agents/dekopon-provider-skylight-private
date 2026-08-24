@@ -157,7 +157,7 @@ cargo test --locked --lib
 cargo check --locked --target wasm32-unknown-unknown
 ./build.sh
 DEKOPON_SKYLIGHT_COMPONENT=dist/provider-skylight-private.wasm \
-  cargo test --locked --test broker_host --test component_host
+  cargo test --locked --test broker_host --test component_host -- --test-threads=1
 scripts/verify-component.sh
 scripts/test-direct-refusal.sh
 scripts/generate-sbom.sh
