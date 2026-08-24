@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.89.0"
+  WASM_TOOLS_VERSION: "1.236.1"
+  WASM_TOOLS_SHA256: "2ea92231826976cb001c6c6d8708ff54e1ef1ea7229968a75a2119ff26c4cd6f"
+
+jobs:
+  verify:
+    name: source, behavior, component, and reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reject tracked generated artifacts at start
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)(target|dist)/|\.wasm(\.sha256)?$|\.cdx\.json$'; then
+            echo 'generated artifact is tracked' >&2
+            exit 1
+          fi
+          git diff --exit-code
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy,rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Install exact wasm-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/wasm-tools"
+          mkdir -p "$tools"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz" \
+            --output "$RUNNER_TEMP/wasm-tools.tar.gz"
+          echo "${WASM_TOOLS_SHA256}  $RUNNER_TEMP/wasm-tools.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/wasm-tools.tar.gz" \
+            --directory "$tools" --strip-components 1
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Validate exact source and locked crates.io graph
+        shell: bash
+        run: |
+          scripts/validate-source.sh
+          scripts/assert-lock-and-feature-graph.sh
+
+      - name: Check formatting and lints
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run unchanged and supplemental native unit tests
+        run: cargo test --locked --lib
+
+      - name: Check the Wasm guest target
+        run: cargo check --locked --target wasm32-unknown-unknown
+
+      - name: Check advisories, licenses, duplicates, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check
+          command-arguments: advisories bans licenses sources
+          arguments: --all-features
+
+      - name: Build and inspect the untracked component
+        shell: bash
+        run: |
+          ./build.sh
+          scripts/verify-component.sh
+
+      - name: Run real-broker refusal and in-memory-component integration tests
+        shell: bash
+        env:
+          DEKOPON_SKYLIGHT_COMPONENT: ${{ github.workspace }}/dist/provider-skylight-private.wasm
+        run: cargo test --locked --test broker_host --test component_host -- --nocapture
+
+      - name: Independently pin immediate-host refusal
+        run: scripts/test-direct-refusal.sh
+
+      - name: Generate deterministic dependency inventory and SBOM
+        run: scripts/generate-sbom.sh
+
+      - name: Rebuild in two independent clean checkouts
+        run: scripts/check-reproducible.sh
+
+      - name: Reject generated changes and tracked artifacts at end
+        shell: bash
+        run: |
+          scripts/validate-source.sh
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git diff --exit-code
+          git diff --cached --exit-code
+          if git ls-files | grep -E '(^|/)(target|dist)/|\.wasm(\.sha256)?$|\.cdx\.json$'; then
+            echo 'generated artifact became tracked' >&2
+            exit 1
+          fi

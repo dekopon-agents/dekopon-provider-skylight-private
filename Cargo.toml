@@ -1,0 +1,39 @@
+[workspace]
+
+[package]
+name = "dekopon-skylight-private-provider"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+description = "Unsupported private Skylight account and frame reads over broker HTTP"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dekopon-agents/dekopon-provider-skylight-private"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dekopon-provider-http = "=0.11.1"
+dekopon-provider-sdk = "=0.11.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+wit-bindgen = { version = "=0.44.0", default-features = false, features = ["macros", "realloc"] }
+
+[dev-dependencies]
+dekopon-broker-host = "=0.11.1"
+dekopon-capability = { version = "=0.11.1", default-features = false }
+dekopon-core = { version = "=0.11.1", default-features = false }
+dekopon-provider-host = "=0.11.1"
+tokio = { version = "=1.49.0", features = ["macros", "rt-multi-thread"] }
+wasmtime = { version = "=36.0.13", default-features = false, features = ["async", "component-model", "cranelift", "parallel-compilation", "runtime", "std"] }
+
+# The generated wit-bindgen export shims expand at crate scope. Denying unsafe code here would
+# require a crate-wide exception and would not protect provider-authored code.
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

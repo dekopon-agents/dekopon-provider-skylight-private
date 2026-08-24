@@ -1,0 +1,211 @@
+name: Dormant v0.1.0 release
+
+on:
+  push:
+    tags:
+      - "v0.1.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.1.0
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.89.0"
+  WASM_TOOLS_VERSION: "1.236.1"
+  WASM_TOOLS_SHA256: "2ea92231826976cb001c6c6d8708ff54e1ef1ea7229968a75a2119ff26c4cd6f"
+  ORAS_VERSION: "1.3.3"
+  ORAS_SHA256: "9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59"
+
+jobs:
+  gates:
+    name: Re-run every source and artifact gate
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && github.ref == 'refs/tags/v0.1.0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact tag without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require repository, annotated tag, HEAD, main, and version identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = tag
+          tagged=$(git rev-parse refs/tags/v0.1.0^{})
+          test "$tagged" = "$(git rev-parse HEAD)"
+          test "$tagged" = "$GITHUB_SHA"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          test "$tagged" = "$(git rev-parse refs/remotes/origin/main)"
+          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy,rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Install exact wasm-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/wasm-tools"
+          mkdir -p "$tools"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz" \
+            --output "$RUNNER_TEMP/wasm-tools.tar.gz"
+          echo "${WASM_TOOLS_SHA256}  $RUNNER_TEMP/wasm-tools.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/wasm-tools.tar.gz" \
+            --directory "$tools" --strip-components 1
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Run source, lock, format, lint, unit, and Wasm gates
+        shell: bash
+        run: |
+          scripts/validate-source.sh
+          scripts/assert-lock-and-feature-graph.sh
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --lib
+          cargo check --locked --target wasm32-unknown-unknown
+
+      - name: Check advisories, licenses, duplicates, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check
+          command-arguments: advisories bans licenses sources
+          arguments: --all-features
+
+      - name: Build, inspect, integrate, inventory, and reproduce
+        shell: bash
+        run: |
+          ./build.sh
+          scripts/verify-component.sh
+          DEKOPON_SKYLIGHT_COMPONENT="$PWD/dist/provider-skylight-private.wasm" \
+            cargo test --locked --test broker_host --test component_host -- --nocapture
+          scripts/test-direct-refusal.sh
+          scripts/generate-sbom.sh
+          scripts/check-reproducible.sh
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Upload exactly two future release inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-skylight-private-v0.1.0
+          path: |
+            dist/provider-skylight-private.wasm
+            dist/provider-skylight-private.wasm.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Create draft and one versioned GHCR layer
+    needs: gates
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && github.ref == 'refs/tags/v0.1.0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Re-check exact annotated tag identity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse any non-main or non-annotated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = tag
+          tagged=$(git rev-parse refs/tags/v0.1.0^{})
+          test "$tagged" = "$GITHUB_SHA"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          test "$tagged" = "$(git rev-parse refs/remotes/origin/main)"
+          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+
+      - name: Download the two gated files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-skylight-private-v0.1.0
+          path: release-input
+
+      - name: Verify exactly two basename-only inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$'provider-skylight-private.wasm\nprovider-skylight-private.wasm.sha256'
+          actual=$(find release-input -type f -maxdepth 1 -exec basename {} \; | sort)
+          test "$actual" = "$expected"
+          cd release-input
+          sha256sum --check --strict provider-skylight-private.wasm.sha256
+          test "$(awk '{print $2}' provider-skylight-private.wasm.sha256)" = provider-skylight-private.wasm
+
+      - name: Install exact ORAS client
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oras"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+            --output "$RUNNER_TEMP/oras.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/oras.tar.gz" --directory "$RUNNER_TEMP/oras" oras
+          echo "$RUNNER_TEMP/oras" >> "$GITHUB_PATH"
+
+      - name: Push one basename-only versioned Wasm layer
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image=ghcr.io/dekopon-agents/provider-skylight-private:0.1.0
+          echo "$GHCR_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          if oras manifest fetch "$image" >/dev/null 2>&1; then
+            echo 'refusing to replace an existing GHCR version' >&2
+            exit 1
+          fi
+          cd release-input
+          oras push --artifact-type application/vnd.dekopon.provider.component.v1 \
+            "$image" \
+            'provider-skylight-private.wasm:application/wasm'
+          oras manifest fetch "$image" > "$RUNNER_TEMP/manifest.json"
+          python3 - "$RUNNER_TEMP/manifest.json" <<'PY'
+          import json, pathlib, sys
+          manifest = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          layers = manifest.get("layers", [])
+          assert len(layers) == 1, layers
+          assert layers[0]["mediaType"] == "application/wasm", layers[0]
+          assert layers[0].get("annotations", {}).get("org.opencontainers.image.title") == "provider-skylight-private.wasm", layers[0]
+          PY
+
+      - name: Create a two-file prerelease draft
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: v0.1.0
+          name: skylight-private v0.1.0 (unsupported exploration)
+          draft: true
+          prerelease: true
+          fail_on_unmatched_files: true
+          files: |
+            release-input/provider-skylight-private.wasm
+            release-input/provider-skylight-private.wasm.sha256
+          body: |
+            Unsupported, opt-in, private, mock-only exploration. Not production.
+            No default catalog, image, policy, credential, package, or deployment includes it.
