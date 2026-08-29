@@ -1,0 +1,236 @@
+name: Recover v0.1.0 release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recover-v0.1.0
+  cancel-in-progress: false
+
+env:
+  ORAS_VERSION: "1.3.3"
+  ORAS_SHA256: "9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59"
+
+jobs:
+  recover:
+    name: Verify the draft and recover the canonical GHCR artifact
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # GitHub deliberately hides drafts from the public by-tag endpoint. Read the existing draft
+      # from the authenticated releases collection; this workflow never mutates it.
+      contents: write
+      packages: write
+    steps:
+      - name: Check out the immutable annotated tag without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/v0.1.0
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove the tag identity and retained main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          git fetch --force origin refs/tags/v0.1.0:refs/tags/v0.1.0
+          test "$(git cat-file -t refs/tags/v0.1.0)" = tag
+          tagged=$(git rev-parse refs/tags/v0.1.0^{})
+          test "$tagged" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$tagged" refs/remotes/origin/main
+          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+
+      - name: Select and verify exactly one recoverable draft by immutable ID
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            >"$RUNNER_TEMP/releases-pages.json"
+          tagged=$(git rev-parse refs/tags/v0.1.0^{})
+          python3 - "$RUNNER_TEMP/releases-pages.json" "$tagged" \
+            "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/assets.tsv" <<'PY'
+          import json, pathlib, sys
+
+          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          releases = [release for page in pages for release in page]
+          matches = [release for release in releases if release.get("tag_name") == "v0.1.0"]
+          assert len(matches) == 1, [(release.get("id"), release.get("draft")) for release in matches]
+          release = matches[0]
+          expected_body = (
+              "Unsupported, opt-in, private, mock-only exploration. Not production.\n"
+              "No default catalog, image, policy, credential, package, or deployment includes it.\n"
+          )
+          assert release.get("target_commitish") == sys.argv[2], release.get("target_commitish")
+          assert release.get("name") == "skylight-private v0.1.0 (unsupported exploration)"
+          assert release.get("body") == expected_body, repr(release.get("body"))
+          assert release.get("draft") is True, release.get("draft")
+          assert release.get("prerelease") is True, release.get("prerelease")
+          assets = sorted(release.get("assets", []), key=lambda value: value["name"])
+          expected = ["provider-skylight-private.wasm", "provider-skylight-private.wasm.sha256"]
+          assert [asset.get("name") for asset in assets] == expected, assets
+          assert all(asset.get("state") == "uploaded" for asset in assets), assets
+          assert all(isinstance(asset.get("id"), int) and asset["id"] > 0 for asset in assets), assets
+          assert all(isinstance(asset.get("size"), int) and asset["size"] > 0 for asset in assets), assets
+          pathlib.Path(sys.argv[3]).write_text(json.dumps(release, sort_keys=True))
+          with pathlib.Path(sys.argv[4]).open("w") as output:
+              for asset in assets:
+                  output.write(
+                      f'{asset["id"]}\t{asset["name"]}\t{asset["size"]}\t{asset.get("digest", "")}\n'
+                  )
+          print(f'release_id={release["id"]}', file=open(pathlib.Path.cwd() / ".release-output", "w"))
+          PY
+          cat .release-output >>"$GITHUB_OUTPUT"
+          rm .release-output
+
+      - name: Download and byte-verify both draft assets by captured IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-input
+          while IFS=$'\t' read -r asset_id asset_name expected_size expected_digest; do
+            gh api --header 'Accept: application/octet-stream' \
+              "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              >"release-input/$asset_name"
+            test "$(wc -c <"release-input/$asset_name" | tr -d ' ')" = "$expected_size"
+            if [[ -n "$expected_digest" ]]; then
+              actual="sha256:$(sha256sum "release-input/$asset_name" | awk '{print $1}')"
+              test "$actual" = "$expected_digest"
+            fi
+          done <"$RUNNER_TEMP/assets.tsv"
+          expected=$'provider-skylight-private.wasm\nprovider-skylight-private.wasm.sha256'
+          actual=$(find release-input -maxdepth 1 -type f -exec basename {} \; | sort)
+          test "$actual" = "$expected"
+          cd release-input
+          sha256sum --check --strict provider-skylight-private.wasm.sha256
+          test "$(awk '{print $2}' provider-skylight-private.wasm.sha256)" = \
+            provider-skylight-private.wasm
+
+      - name: Install exact ORAS client
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oras"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
+            --output "$RUNNER_TEMP/oras.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/oras.tar.gz" \
+            --directory "$RUNNER_TEMP/oras" oras
+          echo "$RUNNER_TEMP/oras" >>"$GITHUB_PATH"
+
+      - name: Strictly create or verify the one canonical versioned Wasm layer
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=ghcr.io/dekopon-agents/provider-skylight-private:0.1.0
+          tagged=$(git rev-parse refs/tags/v0.1.0^{})
+          created=$(git show -s --format=%cI "$tagged")
+          manifest="$RUNNER_TEMP/manifest.json"
+          descriptor="$RUNNER_TEMP/descriptor.json"
+          error_log="$RUNNER_TEMP/manifest-fetch.err"
+          echo "$GHCR_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+          package_url="$GITHUB_API_URL/orgs/dekopon-agents/packages/container/provider-skylight-private"
+          package_json="$RUNNER_TEMP/package.json"
+          package_status=$(curl --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --header "Authorization: Bearer $GHCR_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "$package_json" --write-out '%{http_code}' \
+            "$package_url")
+          case "$package_status" in
+            404) state=absent ;;
+            200)
+              state=existing
+              python3 - "$package_json" <<'PY'
+          import json, pathlib, sys
+          package = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert package.get("name") == "provider-skylight-private", package
+          assert package.get("package_type") == "container", package
+          assert package.get("visibility") in {"private", "public"}, package
+          PY
+              oras manifest fetch "$image" >"$manifest" 2>"$error_log" || {
+                cat "$error_log" >&2
+                echo 'the package exists but its immutable v0.1.0 manifest is unavailable' >&2
+                exit 1
+              }
+              ;;
+            *)
+              cat "$package_json" >&2
+              echo "indeterminate GHCR package lookup (HTTP $package_status)" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$state" == absent ]]; then
+            (
+              cd release-input
+              oras push --image-spec v1.1 --no-tty \
+                --artifact-type application/vnd.dekopon.provider.v1+wasm \
+                --annotation "org.opencontainers.image.created=$created" \
+                "$image" \
+                'provider-skylight-private.wasm:application/wasm'
+            )
+            oras manifest fetch "$image" >"$manifest"
+          fi
+          oras manifest fetch --descriptor "$image" >"$descriptor"
+
+          python3 - "$manifest" "$descriptor" \
+            release-input/provider-skylight-private.wasm \
+            release-input/provider-skylight-private.wasm.sha256 "$created" <<'PY'
+          import hashlib, json, pathlib, sys
+
+          manifest_path = pathlib.Path(sys.argv[1])
+          descriptor_path = pathlib.Path(sys.argv[2])
+          component_path = pathlib.Path(sys.argv[3])
+          checksum_path = pathlib.Path(sys.argv[4])
+          created = sys.argv[5]
+          raw_manifest = manifest_path.read_bytes()
+          descriptor = json.loads(descriptor_path.read_text())
+          component = component_path.read_bytes()
+          checksum_fields = checksum_path.read_text().split()
+          expected_hex = hashlib.sha256(component).hexdigest()
+          assert checksum_fields == [expected_hex, "provider-skylight-private.wasm"], checksum_fields
+          expected_layer_digest = f"sha256:{expected_hex}"
+          expected_manifest = {
+              "schemaVersion": 2,
+              "mediaType": "application/vnd.oci.image.manifest.v1+json",
+              "artifactType": "application/vnd.dekopon.provider.v1+wasm",
+              "config": {
+                  "mediaType": "application/vnd.oci.empty.v1+json",
+                  "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                  "size": 2,
+                  "data": "e30=",
+              },
+              "layers": [{
+                  "mediaType": "application/wasm",
+                  "digest": expected_layer_digest,
+                  "size": len(component),
+                  "annotations": {"org.opencontainers.image.title": "provider-skylight-private.wasm"},
+              }],
+              "annotations": {"org.opencontainers.image.created": created},
+          }
+          expected_raw = json.dumps(expected_manifest, ensure_ascii=False, separators=(",", ":")).encode()
+          assert raw_manifest == expected_raw, "remote manifest differs from the exact deterministic manifest"
+          expected_manifest_digest = f"sha256:{hashlib.sha256(expected_raw).hexdigest()}"
+          assert descriptor.get("digest") == expected_manifest_digest, descriptor
+          assert descriptor.get("size") == len(expected_raw), descriptor
+          assert descriptor.get("mediaType") == expected_manifest["mediaType"], descriptor
+          assert descriptor.get("artifactType") == expected_manifest["artifactType"], descriptor
+          PY
+          echo "GHCR state $state verified against the draft's gated Wasm layer"

@@ -177,13 +177,39 @@ jobs:
           No default catalog, image, policy, credential, package, or deployment includes it.
           EOF
 
+          # GitHub's by-tag endpoint returns 404 for drafts. Select from the authenticated
+          # collection instead so a newly created draft can be rediscovered and a rerun cannot
+          # create a second draft for the immutable tag.
           fetch_release() {
-            curl --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            local collection="$RUNNER_TEMP/releases.json" status selection_status
+            status=$(curl --silent --show-error --location --proto '=https' --proto-redir '=https' \
               --header "Authorization: Bearer $RELEASE_TOKEN" \
               --header 'Accept: application/vnd.github+json' \
               --header 'X-GitHub-Api-Version: 2022-11-28' \
-              --output "$release_json" --write-out '%{http_code}' \
-              "$api/releases/tags/v0.1.0"
+              --output "$collection" --write-out '%{http_code}' \
+              "$api/releases?per_page=100")
+            if [[ "$status" != 200 ]]; then
+              printf '%s' "$status"
+              return
+            fi
+            set +e
+            python3 - "$collection" "$release_json" <<'PY'
+          import json, pathlib, sys
+          releases = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          matches = [release for release in releases if release.get("tag_name") == "v0.1.0"]
+          if not matches:
+              raise SystemExit(44)
+          if len(matches) != 1:
+              raise SystemExit(2)
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(matches[0]))
+          PY
+            selection_status=$?
+            set -e
+            case "$selection_status" in
+              0) printf 200 ;;
+              44) printf 404 ;;
+              *) printf 409 ;;
+            esac
           }
 
           status=$(fetch_release)
