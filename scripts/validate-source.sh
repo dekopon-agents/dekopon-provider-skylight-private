@@ -150,6 +150,8 @@ if release.count(provider_artifact_type) != 2:
     raise SystemExit("error: release must publish and verify the canonical provider artifact type")
 if "application/vnd.dekopon.provider.component.v1" in release:
     raise SystemExit("error: release retains the obsolete provider artifact type")
+if 'descriptor.get("artifactType")' in release:
+    raise SystemExit("error: release incorrectly requires artifactType on an OCI descriptor")
 for invariant in [
     "needs:\n      - gates\n      - draft",
     "GitHub's by-tag endpoint returns 404 for drafts",
@@ -167,6 +169,8 @@ if recovery.count(provider_artifact_type) != 2:
     raise SystemExit("error: recovery must publish and verify the canonical provider artifact type")
 if "application/vnd.dekopon.provider.component.v1" in recovery:
     raise SystemExit("error: recovery retains the obsolete provider artifact type")
+if 'descriptor.get("artifactType")' in recovery:
+    raise SystemExit("error: recovery incorrectly requires artifactType on an OCI descriptor")
 for invariant in [
     "refs/tags/v0.1.0",
     "git merge-base --is-ancestor",
