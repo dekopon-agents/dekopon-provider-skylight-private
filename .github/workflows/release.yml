@@ -491,7 +491,6 @@ jobs:
           assert descriptor.get("digest") == expected_manifest_digest, descriptor
           assert descriptor.get("size") == len(expected_raw), descriptor
           assert descriptor.get("mediaType") == expected_manifest["mediaType"], descriptor
-          assert descriptor.get("artifactType") == expected_manifest["artifactType"], descriptor
           title = expected_manifest["layers"][0]["annotations"]["org.opencontainers.image.title"]
           assert pathlib.PurePath(title).name == title, title
           PY

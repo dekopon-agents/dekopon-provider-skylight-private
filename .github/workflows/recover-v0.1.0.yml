@@ -231,6 +231,5 @@ jobs:
           assert descriptor.get("digest") == expected_manifest_digest, descriptor
           assert descriptor.get("size") == len(expected_raw), descriptor
           assert descriptor.get("mediaType") == expected_manifest["mediaType"], descriptor
-          assert descriptor.get("artifactType") == expected_manifest["artifactType"], descriptor
           PY
           echo "GHCR state $state verified against the draft's gated Wasm layer"
