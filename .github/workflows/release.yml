@@ -416,7 +416,7 @@ jobs:
             (
               cd release-input
               oras push --image-spec v1.1 --no-tty \
-                --artifact-type application/vnd.dekopon.provider.component.v1 \
+                --artifact-type application/vnd.dekopon.provider.v1+wasm \
                 --annotation "org.opencontainers.image.created=$created" \
                 "$image" \
                 'provider-skylight-private.wasm:application/wasm'
@@ -444,7 +444,7 @@ jobs:
           expected_manifest = {
               "schemaVersion": 2,
               "mediaType": "application/vnd.oci.image.manifest.v1+json",
-              "artifactType": "application/vnd.dekopon.provider.component.v1",
+              "artifactType": "application/vnd.dekopon.provider.v1+wasm",
               "config": {
                   "mediaType": "application/vnd.oci.empty.v1+json",
                   "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
