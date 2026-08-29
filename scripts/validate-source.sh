@@ -144,6 +144,11 @@ if release.count("git fetch --force origin") != 3:
     raise SystemExit("error: every release job must force-fetch the annotated tag object")
 if release.count("contents: write") != 1 or release.count("packages: write") != 1:
     raise SystemExit("error: draft and GHCR publication permissions must remain split")
+provider_artifact_type = "application/vnd.dekopon.provider.v1+wasm"
+if release.count(provider_artifact_type) != 2:
+    raise SystemExit("error: release must publish and verify the canonical provider artifact type")
+if "application/vnd.dekopon.provider.component.v1" in release:
+    raise SystemExit("error: release retains the obsolete provider artifact type")
 for invariant in [
     "needs:\n      - gates\n      - draft",
     "indeterminate GHCR lookup; refusing to publish",
