@@ -455,27 +455,39 @@ jobs:
         run: |
           set -euo pipefail
           # The OCI tag carries no leading "v"; the git tag does.
-          image="ghcr.io/dekopon-agents/provider-skylight-private:$VERSION"
+          repository=ghcr.io/dekopon-agents/provider-skylight-private
+          image="$repository:$VERSION"
           created=$(git show -s --format=%cI "$GITHUB_SHA")
           manifest="$RUNNER_TEMP/manifest.json"
           descriptor="$RUNNER_TEMP/descriptor.json"
-          error_log="$RUNNER_TEMP/manifest-fetch.err"
+          tags="$RUNNER_TEMP/oci-tags.txt"
+          error_log="$RUNNER_TEMP/oci-tags.err"
           echo "$GHCR_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-          state=existing
+          # Decide presence from the repository's own tag listing rather than from the prose of a
+          # failed `oras manifest fetch`. Reading absence out of that prose is what left v0.1.0 to
+          # the recovery workflow: ORAS reports a missing tag as `<reference>: not found`, naming
+          # neither "manifest" nor a status code. A listing also answers for exactly this version,
+          # so a second release does not have to be the repository's first.
           set +e
-          oras manifest fetch "$image" > "$manifest" 2> "$error_log"
-          fetch_status=$?
+          oras repo tags "$repository" > "$tags" 2> "$error_log"
+          tags_status=$?
           set -e
-          if ((fetch_status != 0)); then
-            if grep -Eiq '(manifest unknown|manifest_unknown|manifest[^[:cntrl:]]*not found|404[^[:cntrl:]]*not found)' "$error_log"; then
-              state=absent
+          if ((tags_status != 0)); then
+            # Only the OCI spec's own "this repository does not exist" code counts as absence.
+            # GHCR answers a probe of a repository the caller cannot see with `denied`, which is
+            # indistinguishable from a revoked token, so it must never be resolved by pushing.
+            if grep -Eiq '(name unknown|name_unknown)' "$error_log"; then
+              : > "$tags"
             else
               cat "$error_log" >&2
               echo 'indeterminate GHCR lookup; refusing to publish' >&2
               exit 1
             fi
           fi
+          LC_ALL=C sort --output "$tags" "$tags"
+          state=existing
+          grep -Fxq "$VERSION" "$tags" || state=absent
 
           if [[ "$state" == absent ]]; then
             (
@@ -486,8 +498,8 @@ jobs:
                 "$image" \
                 'provider-skylight-private.wasm:application/wasm'
             )
-            oras manifest fetch "$image" > "$manifest"
           fi
+          oras manifest fetch "$image" > "$manifest"
           oras manifest fetch --descriptor "$image" > "$descriptor"
 
           python3 - "$manifest" "$descriptor" \
