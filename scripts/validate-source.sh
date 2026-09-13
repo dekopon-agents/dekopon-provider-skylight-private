@@ -29,6 +29,7 @@ scripts/validate-source.sh
 scripts/verify-component.sh
 security/RESOURCE_LIMITS.md
 security/wasm-dependencies.txt
+src/commands.rs
 src/lib.rs
 tests/broker_host.rs
 tests/component_host.rs
@@ -59,7 +60,7 @@ root = Path(sys.argv[1])
 expected_wit = """package dekopon:skylight-private@0.1.0;
 
 world provider {
-    include dekopon:provider/provider@0.3.0;
+    include dekopon:provider/provider-cli@0.3.0;
     import dekopon:http/client@1.0.0;
 }
 """
@@ -69,7 +70,7 @@ manifest = tomllib.loads((root / "Cargo.toml").read_text())
 package = manifest["package"]
 required = {
     "name": "dekopon-skylight-private-provider",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "edition": "2024",
     "rust-version": "1.98.1",
     "repository": "https://github.com/dekopon-agents/dekopon-provider-skylight-private",
@@ -92,7 +93,7 @@ for needle in required_source:
     if source.count(needle) != 1:
         raise SystemExit(f"error: fixed source contract missing or duplicated: {needle}")
 legacy_tests = {
-    "manifest_is_exactly_the_two_medium_read_capabilities": "7ddb43babfc1908c054d8bd8746fdf3974df1abfe53e669342490efa1f3796e6",
+    "manifest_is_exactly_the_two_medium_read_capabilities": "3a8a50e9213a4e87a4536d5afabe0820178cf8bc0eb0b72057adb6b1f2597858",
     "unknown_non_object_and_extra_field_inputs_never_send": "07c09cba450492cfd789481c29673348ea10b4a2def3604f7bfc02cf75bf8cae",
     "account_uses_one_exact_fixed_request_and_projects_only_the_id": "df2a8093fa2ef6e44f716f40737cee01757cee918fb65975836c1a874d1e9795",
     "account_rejects_missing_empty_non_string_and_oversized_ids": "dfaff88574be531203cdeacb6c1ab0f37901a259f60e27813fd2a8f4f9fe5abd",

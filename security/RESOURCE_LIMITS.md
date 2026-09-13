@@ -28,15 +28,15 @@ machine-dependent; byte, memory-page, and fuel measurements are pinned by the te
 
 | Measurement | Observed | Headroom to committed ceiling |
 |---|---:|---:|
-| Composed component bytes | 283,422 bytes | 109,794 bytes |
+| Composed component bytes | 288,735 bytes | 104,481 bytes |
 | Worst-case actual SDK frame envelope (13 whole records retained) | 30,430 bytes | 2,338 bytes |
 | Near-limit valid SDK envelope (32 smallest records retained) | 1,182 bytes | 31,586 bytes |
 | Near-limit valid response body | 260,010 bytes | 2,134 bytes |
 | Near-limit malformed-last response body | 260,049 bytes | 2,095 bytes |
 | Peak guest memory requested by either near-limit probe | 2,359,296 bytes | 31,195,136 bytes |
-| Fuel: near-limit valid response | 63,860,099 | 64,139,901 |
-| Fuel: near-limit malformed-last duplicate | 70,362,061 | 57,637,939 |
-| In-memory near-limit test elapsed time | 569 ms | 9,431 ms |
+| Fuel: near-limit valid response | 63,860,097 | 64,139,903 |
+| Fuel: near-limit malformed-last duplicate | 70,362,106 | 57,637,894 |
+| In-memory near-limit test elapsed time | 1,020 ms | 8,980 ms |
 
 The smaller output-budget fixture is generated in memory from synthetic control-character-heavy IDs
 and names. The near-limit probes generate 20,000 unique three-byte UTF-8 IDs in a deterministic

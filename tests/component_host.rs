@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dekopon_provider_sdk::{ComponentFailure, ComponentResponse};
+use dekopon_provider_sdk::{CommandRunOutcome, ComponentFailure, ComponentResponse};
 use serde_json::json;
 use wasmtime::{
     Config, Engine, ResourceLimiter, Store,
@@ -503,6 +503,71 @@ fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
         store.data().limits.peak_memory_bytes,
         fuel_consumed,
         started.elapsed().as_millis(),
+    );
+}
+
+/// `run-command` answers from the guest alone: a proposal, the help page, or the usage error, and
+/// never a call through the HTTP import, whatever argv or piped value arrives.
+#[test]
+fn run_command_proposes_or_renders_without_touching_the_http_import() {
+    let (mut store, provider) = instantiate(response(account_body()));
+    let mut run = |words: &[&str]| -> CommandRunOutcome {
+        let argv = words
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect::<Vec<_>>();
+        let encoded = provider
+            .call_run_command(&mut store, &argv, Some("piped-sentinel"))
+            .expect("run-command returns rather than traps");
+        serde_json::from_str(&encoded).expect("run-command result is an SDK outcome")
+    };
+
+    for (verb, capability) in [
+        ("account", "skylight.private.account.read"),
+        ("frames", "skylight.private.frames.list"),
+    ] {
+        assert_eq!(
+            run(&[verb]),
+            CommandRunOutcome::Proposed {
+                capability: capability.parse().expect("valid capability fixture"),
+                input: json!({}),
+            }
+        );
+    }
+
+    let CommandRunOutcome::Rendered {
+        stdout,
+        stderr,
+        status,
+    } = run(&["--help"])
+    else {
+        panic!("help must render");
+    };
+    assert_eq!(status, 0);
+    assert!(
+        stdout.starts_with("Unsupported private Skylight"),
+        "{stdout}"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+
+    let CommandRunOutcome::Rendered {
+        stdout,
+        stderr,
+        status,
+    } = run(&["frames", "caller-controlled-sentinel"])
+    else {
+        panic!("a usage error must render");
+    };
+    assert_eq!(status, 2);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.starts_with("error: "), "{stderr}");
+    for sentinel in ["caller-controlled-sentinel", "piped-sentinel"] {
+        assert!(!stderr.contains(sentinel), "usage error echoed {sentinel}");
+    }
+
+    assert!(
+        store.data().requests.is_empty(),
+        "run-command must never reach the HTTP import"
     );
 }
 

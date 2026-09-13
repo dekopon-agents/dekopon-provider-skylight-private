@@ -42,7 +42,8 @@ if len(model["worlds"]) != 1 or model["worlds"][0]["name"] != "root":
 world = model["worlds"][0]
 if world["imports"] != {"interface-0": {"interface": {"id": 0}}}:
     raise SystemExit(f"error: component import set is not exact: {world['imports']}")
-if list(world["exports"]) != ["describe", "invoke"]:
+# wit-component lists the world's own export before the ones `include provider;` brings in.
+if list(world["exports"]) != ["run-command", "describe", "invoke"]:
     raise SystemExit(f"error: component export set/order is not exact: {list(world['exports'])}")
 if len(model["interfaces"]) != 1:
     raise SystemExit("error: component must import exactly one interface")
@@ -81,4 +82,4 @@ component_metadata=$(wasm-tools metadata show "$component")
 grep -q 'Rust' <<<"$core_metadata"
 grep -q 'wit-bindgen-rust' <<<"$component_metadata"
 
-echo "component verified: imports=dekopon:http/client@1.0.0 exports=describe,invoke bytes=$component_bytes sha256=$(awk '{print $1}' "$checksum")"
+echo "component verified: imports=dekopon:http/client@1.0.0 exports=run-command,describe,invoke bytes=$component_bytes sha256=$(awk '{print $1}' "$checksum")"

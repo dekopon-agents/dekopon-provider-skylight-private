@@ -15,8 +15,31 @@ capabilities:
 | `skylight.private.frames.list` | `Lists bounded identifiers and optional names for visible frames` | `GET https://app.ourskylight.com/api/frames` | At most 32 sorted frame IDs and optional marked names |
 
 The manifest description is exactly `Unsupported private Skylight account and frame reads over
-broker HTTP`. It has no command words. Both input schemas are exactly
+broker HTTP`. Its one command word is `skylight`. Both input schemas are exactly
 `{"type":"object","properties":{},"additionalProperties":false}`.
+
+## Command word
+
+An agent's shell reaches the provider through `skylight`:
+
+| Argv | Result |
+|---|---|
+| `skylight account` | proposes `skylight.private.account.read` with `{}` |
+| `skylight frames` | proposes `skylight.private.frames.list` with `{}` |
+| `skylight --help`, `skylight -h`, `skylight help` | the help page on stdout, exit 0 |
+| anything else | one fixed usage error on stderr, exit 2 |
+
+A proposal is authorized exactly like a direct invocation: constraint set, Cedar, then broker
+credential injection. There are no arguments or flags because both inputs are exactly `{}`, and
+piped input is ignored. Neither page quotes argv, so caller text never comes back through the word.
+Both pages are byte-pinned in `src/commands.rs`.
+
+The parser is a slice match against the SDK's `CommandRun`. The SDK's `clap` feature stays off,
+so no parser crate enters the shipped closure. The component also keeps its hand-written export
+instead of `export_provider_with_cli!`: the SDK's generic `invoke` parses the capability and the
+JSON first, which would turn malformed capability syntax into `invalid-capability` and forward
+parser detail, breaking the precedence and failure table below. `describe` and `run-command` are
+the SDK's own.
 
 ## Fixed contract and projection
 
@@ -180,7 +203,7 @@ authority and request-budget refusal; successful native broker HTTP cannot be sa
 changing the fixed production URI. No test contacts Skylight, a public host, DNS, or loopback, and
 no captured response fixture is permitted.
 
-The finished component must export only `describe` and `invoke`, import exactly
+The finished component must export only `describe`, `invoke`, and `run-command`, import exactly
 `dekopon:http/client@1.0.0`, and import no WASI, filesystem, environment, clock, random, socket,
 JavaScript, or other ambient interface. The immediate host refuses it because that host provides no
 HTTP import. See [`security/RESOURCE_LIMITS.md`](security/RESOURCE_LIMITS.md) for committed ceilings
