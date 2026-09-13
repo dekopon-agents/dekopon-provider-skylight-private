@@ -2,8 +2,8 @@ use std::{path::PathBuf, time::Duration};
 
 use dekopon_broker_host::{BrokerHostError, BrokerHostLimits, BrokerProviderRegistry};
 use dekopon_capability::{
-    AuthorizedInvocation, EffectKind, ExecutionConstraints, HttpConstraints, Idempotency,
-    ProposedInvocation, broker::AuthorizationGate,
+    AuthorizedInvocation, EffectKind, ExecutionConstraints, HttpConstraints, ProposedInvocation,
+    broker::AuthorizationGate,
 };
 use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, RiskLevel, TraceId};
 use dekopon_provider_sdk::ProviderApiVersion;
@@ -53,6 +53,7 @@ fn constraints(authority: &str, max_request_bytes: u64) -> ExecutionConstraints 
             allow_plaintext_loopback: false,
         }),
         storage: None,
+        secret_use: None,
     }
 }
 
@@ -68,7 +69,9 @@ fn authorized(capability: &str, constraints: ExecutionConstraints) -> Authorized
                 .parse::<AgentId>()
                 .expect("valid agent fixture"),
         },
-        "skylight-test-trace"
+        // 0.13.0 made `TraceId` the W3C one: sixteen bytes, thirty-two lowercase hex digits, so a
+        // free-form fixture name no longer parses. These digits are synthetic and correlate nothing.
+        "5ce1a6207e57000000000000decafbad"
             .parse::<TraceId>()
             .expect("valid trace fixture"),
         json!({}),
@@ -134,7 +137,6 @@ async fn crates_io_broker_loads_the_exact_manifest() {
         assert_eq!(capability.description, description);
         assert_eq!(capability.effect, EffectKind::ReadOnly);
         assert_eq!(capability.risk, RiskLevel::Medium);
-        assert_eq!(capability.idempotency, Idempotency::Idempotent);
         assert_eq!(capability.input_schema, schema);
     }
 }

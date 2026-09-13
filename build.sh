@@ -10,9 +10,9 @@ core="$dist/provider-skylight-private.core.wasm"
 component="$dist/provider-skylight-private.wasm"
 checksum="$component.sha256"
 
-rust_toolchain="1.89.0"
-required_rustc="rustc 1.89.0 (29483883e 2025-08-04)"
-required_wasm_tools_version="1.236.1"
+rust_toolchain="1.98.1"
+required_rustc="rustc 1.98.1 (48a229cea 2026-09-01)"
+required_wasm_tools_version="1.259.0"
 
 command -v rustup >/dev/null 2>&1 || {
   echo "error: rustup with Rust $rust_toolchain is required" >&2

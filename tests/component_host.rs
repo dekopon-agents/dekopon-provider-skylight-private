@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dekopon_provider_host::{HostLimits, ProviderHostError, ProviderRegistry};
 use dekopon_provider_sdk::{ComponentFailure, ComponentResponse};
 use serde_json::json;
 use wasmtime::{
@@ -226,6 +225,12 @@ fn assert_request(request: &Request, uri: &str) {
     assert!(accounted <= MAX_REQUEST_BYTES);
 }
 
+/// A host that links nothing must not be able to instantiate this component.
+///
+/// The property is the component's, not any one host's: `dekopon:http/client@1.0.0` is privileged
+/// and is satisfied only by a host that deliberately links it. This is asserted against an empty
+/// Wasmtime linker rather than a named import-free host crate so it keeps holding as the Dekopon
+/// tree rearranges its hosts.
 #[test]
 fn immediate_host_refuses_the_sole_privileged_import() {
     let path = component_path();
@@ -233,17 +238,31 @@ fn immediate_host_refuses_the_sole_privileged_import() {
         .unwrap_or_else(|error| panic!("build {} first: {error}", path.display()))
         .len();
     assert!(bytes <= MAX_COMPONENT_BYTES);
-    let limits = HostLimits {
-        max_memory_bytes: MAX_MEMORY_BYTES,
-        max_input_bytes: MAX_INPUT_BYTES,
-        max_output_bytes: MAX_OUTPUT_BYTES,
-        fuel: MAX_FUEL,
-        timeout: TIMEOUT,
-        ..HostLimits::default()
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    let engine = Engine::new(&config).expect("component engine configures");
+    let component = Component::from_file(&engine, &path).expect("component compiles");
+    let linker: Linker<State> = Linker::new(&engine);
+    let mut store = Store::new(
+        &engine,
+        State {
+            limits: Limits::default(),
+            requests: Vec::new(),
+            response: response(account_body()),
+        },
+    );
+    store.limiter(|state| &mut state.limits);
+    store.set_fuel(MAX_FUEL).expect("fuel is configured");
+    let error = match bindings::Provider::instantiate(&mut store, &component, &linker) {
+        Ok(_) => panic!("an import-free host must not satisfy broker HTTP imports"),
+        Err(error) => error,
     };
-    let error = ProviderRegistry::load([path], limits)
-        .expect_err("the immediate host must not satisfy broker HTTP imports");
-    assert!(matches!(error, ProviderHostError::Instantiate { .. }));
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("dekopon:http/client"),
+        "refusal must name the unsatisfied privileged import: {rendered}"
+    );
 }
 
 #[test]

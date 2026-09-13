@@ -13,8 +13,8 @@ use std::{fmt, marker::PhantomData};
 
 use dekopon_provider_http::{Header, HttpError, Request, Response, method};
 use dekopon_provider_sdk::{
-    CapabilityId, ComponentFailure, ComponentResponse, EffectKind, Idempotency, Provider,
-    ProviderApiVersion, ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
+    CapabilityId, ComponentFailure, ComponentResponse, EffectKind, Provider, ProviderApiVersion,
+    ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
 };
 use serde::{
     Deserialize, Deserializer, Serialize,
@@ -95,7 +95,6 @@ impl Provider for SkylightPrivate {
             description: description.to_owned(),
             effect: EffectKind::ReadOnly,
             risk: RiskLevel::Medium,
-            idempotency: Idempotency::Idempotent,
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -548,7 +547,7 @@ mod tests {
     use std::cell::Cell;
 
     use dekopon_provider_http::{Header, HttpError, HttpErrorCode, Request, Response};
-    use dekopon_provider_sdk::{EffectKind, Idempotency, Provider, RiskLevel};
+    use dekopon_provider_sdk::{EffectKind, Provider, RiskLevel};
     use serde_json::{Map, Value, json};
 
     use super::{
@@ -643,7 +642,6 @@ mod tests {
         for capability in &manifest.capabilities {
             assert_eq!(capability.effect, EffectKind::ReadOnly);
             assert_eq!(capability.risk, RiskLevel::Medium);
-            assert_eq!(capability.idempotency, Idempotency::Idempotent);
             assert_eq!(capability.input_schema, empty_schema);
             assert!(!capability.id.as_str().contains("write"));
             assert!(!capability.id.as_str().contains("request"));
@@ -1082,8 +1080,8 @@ mod tests {
             encoded,
             concat!(
                 r#"{"apiVersion":"dekopon.dev/provider/v1alpha1","id":"skylight-private","description":"Unsupported private Skylight account and frame reads over broker HTTP","capabilities":["#,
-                r#"{"id":"skylight.private.account.read","description":"Reads only the bearer-selected account identifier","effect":"read-only","risk":"Medium","idempotency":"idempotent","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}},"#,
-                r#"{"id":"skylight.private.frames.list","description":"Lists bounded identifiers and optional names for visible frames","effect":"read-only","risk":"Medium","idempotency":"idempotent","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}}],"commandWords":[]}"#
+                r#"{"id":"skylight.private.account.read","description":"Reads only the bearer-selected account identifier","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}},"#,
+                r#"{"id":"skylight.private.frames.list","description":"Lists bounded identifiers and optional names for visible frames","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}}],"commandWords":[]}"#
             )
         );
     }
