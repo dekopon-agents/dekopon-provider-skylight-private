@@ -531,6 +531,7 @@ fn run_command_proposes_or_renders_without_touching_the_http_import() {
             CommandRunOutcome::Proposed {
                 capability: capability.parse().expect("valid capability fixture"),
                 input: json!({}),
+                secret_use: None,
             }
         );
     }
