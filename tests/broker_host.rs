@@ -114,7 +114,7 @@ async fn crates_io_broker_loads_the_exact_manifest() {
         manifest.description,
         "Unsupported private Skylight account and frame reads over broker HTTP"
     );
-    assert!(manifest.command_words.is_empty());
+    assert_eq!(manifest.command_words, ["skylight"]);
     assert_eq!(manifest.capabilities.len(), 2);
 
     let expected = [

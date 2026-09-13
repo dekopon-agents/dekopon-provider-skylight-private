@@ -7,14 +7,16 @@
 //! Route evidence and the `attributes.name` / `attributes.label` fallback were adapted from
 //! `joshuaswarren/pyskylight` commit `69e4576b9035d71aacda9ade7a4afea05a663e94` (MIT). See
 //! `../THIRD_PARTY_NOTICES.md`. This is a native Rust reimplementation; Python is not embedded.
+//!
+//! The `skylight` command word proposes the same two capabilities from argv; see `commands`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::{fmt, marker::PhantomData};
 
 use dekopon_provider_http::{Header, HttpError, Request, Response, method};
 use dekopon_provider_sdk::{
-    CapabilityId, ComponentFailure, ComponentResponse, EffectKind, Provider, ProviderApiVersion,
-    ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
+    CapabilityId, CommandRun, ComponentFailure, ComponentResponse, EffectKind, Provider,
+    ProviderApiVersion, ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
 };
 use serde::{
     Deserialize, Deserializer, Serialize,
@@ -22,8 +24,13 @@ use serde::{
 };
 use serde_json::{Value, json};
 
+mod commands;
+
 const ACCOUNT_CAPABILITY: &str = "skylight.private.account.read";
 const FRAMES_CAPABILITY: &str = "skylight.private.frames.list";
+/// The word an agent's shell types to reach this provider: not reserved by the shell, and free of
+/// the `.`, `-`, and `_` separators that would let it parse as a capability identifier.
+const COMMAND_WORD: &str = "skylight";
 const ACCOUNT_URI: &str = "https://app.ourskylight.com/api/user";
 const FRAMES_URI: &str = "https://app.ourskylight.com/api/frames";
 const ACCEPT_JSON: &str = "application/json";
@@ -109,7 +116,7 @@ impl Provider for SkylightPrivate {
                 .expect("static provider ID is valid"),
             description: "Unsupported private Skylight account and frame reads over broker HTTP"
                 .to_owned(),
-            command_words: Vec::new(),
+            command_words: vec![COMMAND_WORD.to_owned()],
             capabilities: vec![
                 capability(
                     ACCOUNT_CAPABILITY,
@@ -125,6 +132,10 @@ impl Provider for SkylightPrivate {
 
     fn invoke(capability: &CapabilityId, input: Value) -> Result<Value, ProviderError> {
         invoke_with(capability, input, dekopon_provider_http::send)
+    }
+
+    fn run_command(argv: &[String], stdin: Option<&str>) -> Result<CommandRun, ProviderError> {
+        Ok(commands::run(argv, stdin))
     }
 }
 
@@ -525,11 +536,19 @@ fn invoke_component(capability: &str, input_json: &str) -> ComponentResponse {
     }
 }
 
+/// Hand-written rather than `export_provider_with_cli!`: the SDK's generic `invoke` parses the
+/// capability and the JSON before the provider sees either, so malformed syntax would surface as
+/// `invalid-capability` and parser detail would reach the caller. `describe` and `run-command` have
+/// no such boundary and are the SDK's own.
 struct SkylightPrivateComponent;
 
 impl bindings::Guest for SkylightPrivateComponent {
     fn describe() -> String {
         dekopon_provider_sdk::__describe::<SkylightPrivate>()
+    }
+
+    fn run_command(argv: Vec<String>, stdin: Option<String>) -> String {
+        dekopon_provider_sdk::__run_command::<SkylightPrivate>(argv, stdin)
     }
 
     fn invoke(capability: String, input_json: String) -> String {
@@ -624,7 +643,7 @@ mod tests {
     fn manifest_is_exactly_the_two_medium_read_capabilities() {
         let manifest = SkylightPrivate::manifest();
         assert_eq!(manifest.id.as_str(), "skylight-private");
-        assert!(manifest.command_words.is_empty());
+        assert_eq!(manifest.command_words, ["skylight"]);
         assert_eq!(manifest.capabilities.len(), 2);
         assert_eq!(
             manifest
@@ -1081,7 +1100,7 @@ mod tests {
             concat!(
                 r#"{"apiVersion":"dekopon.dev/provider/v1alpha1","id":"skylight-private","description":"Unsupported private Skylight account and frame reads over broker HTTP","capabilities":["#,
                 r#"{"id":"skylight.private.account.read","description":"Reads only the bearer-selected account identifier","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}},"#,
-                r#"{"id":"skylight.private.frames.list","description":"Lists bounded identifiers and optional names for visible frames","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}}],"commandWords":[]}"#
+                r#"{"id":"skylight.private.frames.list","description":"Lists bounded identifiers and optional names for visible frames","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}}],"commandWords":["skylight"]}"#
             )
         );
     }
