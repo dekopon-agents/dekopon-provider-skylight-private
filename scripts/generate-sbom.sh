@@ -25,8 +25,8 @@ metadata_component["hashes"] = [
 document["metadata"]["properties"].extend(
     [
         {"name": "dekopon:component-bytes", "value": str(len(payload))},
-        {"name": "dekopon:rust-toolchain", "value": "1.89.0"},
-        {"name": "dekopon:wasm-tools", "value": "1.236.1"},
+        {"name": "dekopon:rust-toolchain", "value": "1.98.1"},
+        {"name": "dekopon:wasm-tools", "value": "1.259.0"},
     ]
 )
 sbom.write_text(
@@ -54,8 +54,8 @@ document["metadata"]["component"]["hashes"] = [
 document["metadata"]["properties"].extend(
     [
         {"name": "dekopon:component-bytes", "value": str(len(payload))},
-        {"name": "dekopon:rust-toolchain", "value": "1.89.0"},
-        {"name": "dekopon:wasm-tools", "value": "1.236.1"},
+        {"name": "dekopon:rust-toolchain", "value": "1.98.1"},
+        {"name": "dekopon:wasm-tools", "value": "1.259.0"},
     ]
 )
 sbom.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n", newline="\n")

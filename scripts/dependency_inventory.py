@@ -42,66 +42,16 @@ def lock_checksums() -> dict[tuple[str, str, str | None], str | None]:
     }
 
 
-def closure(metadata: dict) -> tuple[list[dict], dict[str, list[str]], str]:
-    packages = {package["id"]: package for package in metadata["packages"]}
-    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    root_id = metadata["resolve"]["root"]
-    if root_id is None:
-        raise RuntimeError("Cargo metadata did not identify the root package")
+def shipped_packages() -> set[tuple[str, str]]:
+    """The exact name/version set the pinned toolchain compiles into the component.
 
-    seen: set[str] = set()
-    edges: dict[str, list[str]] = {}
-    pending = [root_id]
-    while pending:
-        package_id = pending.pop()
-        if package_id in seen:
-            continue
-        seen.add(package_id)
-        selected: list[str] = []
-        for dependency in nodes[package_id]["deps"]:
-            if any(
-                kind["kind"] in (None, "normal", "build")
-                for kind in dependency["dep_kinds"]
-            ):
-                selected.append(dependency["pkg"])
-                pending.append(dependency["pkg"])
-        edges[package_id] = sorted(set(selected))
-
-    checksums = lock_checksums()
-    inventory: list[dict] = []
-    for package_id in seen:
-        if package_id == root_id:
-            continue
-        package = packages[package_id]
-        source = package["source"]
-        if source != REGISTRY:
-            raise RuntimeError(
-                f"shipped dependency {package['name']} {package['version']} is not from crates.io: {source}"
-            )
-        if package["name"].startswith("dekopon-") and package["version"] != "0.11.1":
-            raise RuntimeError(
-                f"Dekopon dependency {package['name']} resolved to {package['version']}, not 0.11.1"
-            )
-        checksum = checksums.get((package["name"], package["version"], source))
-        if not checksum:
-            raise RuntimeError(
-                f"locked registry checksum is missing for {package['name']} {package['version']}"
-            )
-        inventory.append(
-            {
-                "id": package_id,
-                "name": package["name"],
-                "version": package["version"],
-                "license": package.get("license") or "NOASSERTION",
-                "source": source,
-                "checksum": checksum,
-            }
-        )
-    inventory.sort(key=lambda item: (item["name"], item["version"], item["checksum"]))
-    return inventory, edges, root_id
-
-
-def verify_against_cargo_tree(metadata: dict, inventory: list[dict], root_id: str) -> None:
+    `cargo metadata` reports one feature resolution for the whole manifest, so a feature a
+    dev-dependency turns on in a shipped crate — `dekopon-provider-sdk/host`, which drags in
+    Wasmtime and its own closure — appears there as a normal edge of the shipped graph even
+    though no guest code can reach it. `cargo tree` with dev edges cut is the only view that
+    matches what is actually built for `wasm32-unknown-unknown`, so it decides membership and
+    `cargo metadata` supplies attributes alone.
+    """
     command = [
         "cargo",
         "tree",
@@ -124,6 +74,79 @@ def verify_against_cargo_tree(metadata: dict, inventory: list[dict], root_id: st
         if not match:
             raise RuntimeError(f"could not parse locked Cargo tree line: {line!r}")
         packages.add((match.group(1), match.group(2)))
+    return packages
+
+
+def closure(metadata: dict) -> tuple[list[dict], dict[str, list[str]], str]:
+    packages = {package["id"]: package for package in metadata["packages"]}
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    root_id = metadata["resolve"]["root"]
+    if root_id is None:
+        raise RuntimeError("Cargo metadata did not identify the root package")
+    shipped = shipped_packages()
+
+    def is_shipped(package_id: str) -> bool:
+        package = packages[package_id]
+        return (package["name"], package["version"]) in shipped
+
+    seen: set[str] = set()
+    edges: dict[str, list[str]] = {}
+    pending = [root_id]
+    while pending:
+        package_id = pending.pop()
+        if package_id in seen:
+            continue
+        seen.add(package_id)
+        selected: list[str] = []
+        for dependency in nodes[package_id]["deps"]:
+            if not any(
+                kind["kind"] in (None, "normal", "build")
+                for kind in dependency["dep_kinds"]
+            ):
+                continue
+            if not is_shipped(dependency["pkg"]):
+                continue
+            selected.append(dependency["pkg"])
+            pending.append(dependency["pkg"])
+        edges[package_id] = sorted(set(selected))
+
+    checksums = lock_checksums()
+    inventory: list[dict] = []
+    for package_id in seen:
+        if package_id == root_id:
+            continue
+        package = packages[package_id]
+        source = package["source"]
+        if source != REGISTRY:
+            raise RuntimeError(
+                f"shipped dependency {package['name']} {package['version']} is not from crates.io: {source}"
+            )
+        if package["name"].startswith("dekopon-") and package["version"] != "0.13.0":
+            raise RuntimeError(
+                f"Dekopon dependency {package['name']} resolved to {package['version']}, not 0.13.0"
+            )
+        checksum = checksums.get((package["name"], package["version"], source))
+        if not checksum:
+            raise RuntimeError(
+                f"locked registry checksum is missing for {package['name']} {package['version']}"
+            )
+        inventory.append(
+            {
+                "id": package_id,
+                "name": package["name"],
+                "version": package["version"],
+                "license": package.get("license") or "NOASSERTION",
+                "source": source,
+                "checksum": checksum,
+            }
+        )
+    inventory.sort(key=lambda item: (item["name"], item["version"], item["checksum"]))
+    return inventory, edges, root_id
+
+
+def verify_against_cargo_tree(metadata: dict, inventory: list[dict], root_id: str) -> None:
+    """Every compiled package must be reachable from the root over normal/build metadata edges."""
+    packages = shipped_packages()
     by_id = {package["id"]: package for package in metadata["packages"]}
     root = by_id[root_id]
     packages.discard((root["name"], root["version"]))

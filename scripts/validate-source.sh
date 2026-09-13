@@ -59,7 +59,7 @@ root = Path(sys.argv[1])
 expected_wit = """package dekopon:skylight-private@0.1.0;
 
 world provider {
-    include dekopon:provider/provider@0.2.0;
+    include dekopon:provider/provider@0.3.0;
     import dekopon:http/client@1.0.0;
 }
 """
@@ -69,9 +69,9 @@ manifest = tomllib.loads((root / "Cargo.toml").read_text())
 package = manifest["package"]
 required = {
     "name": "dekopon-skylight-private-provider",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "edition": "2024",
-    "rust-version": "1.89.0",
+    "rust-version": "1.98.1",
     "repository": "https://github.com/dekopon-agents/dekopon-provider-skylight-private",
     "publish": False,
 }
@@ -92,7 +92,7 @@ for needle in required_source:
     if source.count(needle) != 1:
         raise SystemExit(f"error: fixed source contract missing or duplicated: {needle}")
 legacy_tests = {
-    "manifest_is_exactly_the_two_medium_read_capabilities": "5f99b9e474a08c822a5dc2f75a7153d9fe1e08e886b4b58578422444cacdefa0",
+    "manifest_is_exactly_the_two_medium_read_capabilities": "7ddb43babfc1908c054d8bd8746fdf3974df1abfe53e669342490efa1f3796e6",
     "unknown_non_object_and_extra_field_inputs_never_send": "07c09cba450492cfd789481c29673348ea10b4a2def3604f7bfc02cf75bf8cae",
     "account_uses_one_exact_fixed_request_and_projects_only_the_id": "df2a8093fa2ef6e44f716f40737cee01757cee918fb65975836c1a874d1e9795",
     "account_rejects_missing_empty_non_string_and_oversized_ids": "dfaff88574be531203cdeacb6c1ab0f37901a259f60e27813fd2a8f4f9fe5abd",
@@ -138,13 +138,15 @@ for workflow in (root / ".github/workflows").glob("*.yml"):
 release = (root / ".github/workflows/release.yml").read_text()
 for forbidden in ("workflow_dispatch", "workflow_call", "branches:"):
     if forbidden in release:
-        raise SystemExit(f"error: dormant release workflow contains forbidden trigger {forbidden}")
-if "tags:\n      - \"v0.1.0\"" not in release:
-    raise SystemExit("error: release trigger is not the exact future v0.1.0 tag")
+        raise SystemExit(f"error: release workflow contains forbidden trigger {forbidden}")
+if "tags:\n      - \"v*\"" not in release:
+    raise SystemExit("error: release trigger is not the annotated v* tag push")
 if release.count("git fetch --force origin") != 3:
-    raise SystemExit("error: every release job must force-fetch the annotated tag object")
-if release.count("contents: write") != 1 or release.count("packages: write") != 1:
-    raise SystemExit("error: draft and GHCR publication permissions must remain split")
+    raise SystemExit("error: every checked-out release job must force-fetch the annotated tag object")
+if release.count("contents: write") != 2 or release.count("packages: write") != 1:
+    raise SystemExit("error: draft, publication, and GHCR permissions must remain split")
+if release.count("id-token: write") != 1 or release.count("attestations: write") != 1:
+    raise SystemExit("error: provenance attestation permissions must be held by exactly one job")
 provider_artifact_type = "application/vnd.dekopon.provider.v1+wasm"
 if release.count(provider_artifact_type) != 2:
     raise SystemExit("error: release must publish and verify the canonical provider artifact type")
@@ -155,7 +157,8 @@ if 'descriptor.get("artifactType")' in release:
 for invariant in [
     "needs:\n      - gates\n      - draft",
     "GitHub's by-tag endpoint returns 404 for drafts",
-    'release.get("tag_name") == "v0.1.0"',
+    'test "$GITHUB_REF_NAME" = "v$version"',
+    "actions/attest-build-provenance@",
     "indeterminate GHCR lookup; refusing to publish",
     "remote manifest differs from the exact deterministic manifest",
     "verified-assets.tsv",

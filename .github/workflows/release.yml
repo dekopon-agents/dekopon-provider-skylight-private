@@ -1,28 +1,28 @@
-name: Dormant v0.1.0 release
+name: Release
 
 on:
   push:
     tags:
-      - "v0.1.0"
+      - "v*"
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-v0.1.0
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
-  RUST_VERSION: "1.89.0"
-  WASM_TOOLS_VERSION: "1.236.1"
-  WASM_TOOLS_SHA256: "2ea92231826976cb001c6c6d8708ff54e1ef1ea7229968a75a2119ff26c4cd6f"
+  RUST_VERSION: "1.98.1"
+  WASM_TOOLS_VERSION: "1.259.0"
+  WASM_TOOLS_SHA256: "3e9b374b4c7715b771b69bf0d65a337990ed4546ec5e97e01c0ff587dfc52160"
   ORAS_VERSION: "1.3.3"
   ORAS_SHA256: "9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59"
 
 jobs:
   gates:
     name: Re-run every source and artifact gate
-    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && github.ref == 'refs/tags/v0.1.0'
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -40,7 +40,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
           test "$GITHUB_EVENT_NAME" = push
-          test "$GITHUB_REF" = refs/tags/v0.1.0
           git fetch --force origin \
             "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
@@ -49,7 +48,8 @@ jobs:
           test "$tagged" = "$GITHUB_SHA"
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           test "$tagged" = "$(git rev-parse refs/remotes/origin/main)"
-          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Install exact Rust toolchain
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
@@ -104,20 +104,55 @@ jobs:
           git diff --cached --exit-code
           test -z "$(git status --porcelain --untracked-files=all)"
 
-      - name: Upload exactly two future release inputs
+      - name: Upload exactly two release inputs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: provider-skylight-private-v0.1.0
+          name: provider-skylight-private-${{ github.ref_name }}
           path: |
             dist/provider-skylight-private.wasm
             dist/provider-skylight-private.wasm.sha256
           if-no-files-found: error
           retention-days: 1
 
+  attest:
+    name: Attest the gated component's build provenance
+    needs: gates
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the two gated files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-skylight-private-${{ github.ref_name }}
+          path: release-input
+
+      - name: Verify exactly two basename-only inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$'provider-skylight-private.wasm\nprovider-skylight-private.wasm.sha256'
+          actual=$(find release-input -maxdepth 1 -type f -exec basename {} \; | sort)
+          test "$actual" = "$expected"
+          cd release-input
+          sha256sum --check --strict provider-skylight-private.wasm.sha256
+          test "$(awk '{print $2}' provider-skylight-private.wasm.sha256)" = provider-skylight-private.wasm
+
+      - name: Attest the component bytes
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: release-input/provider-skylight-private.wasm
+
   draft:
     name: Create or verify the recoverable two-file draft
-    needs: gates
-    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && github.ref == 'refs/tags/v0.1.0'
+    needs:
+      - gates
+      - attest
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -135,7 +170,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
           test "$GITHUB_EVENT_NAME" = push
-          test "$GITHUB_REF" = refs/tags/v0.1.0
           git fetch --force origin \
             "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
@@ -144,12 +178,13 @@ jobs:
           test "$tagged" = "$GITHUB_SHA"
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           test "$tagged" = "$(git rev-parse refs/remotes/origin/main)"
-          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          test "$GITHUB_REF_NAME" = "v$version"
 
       - name: Download the two gated files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: provider-skylight-private-v0.1.0
+          name: provider-skylight-private-${{ github.ref_name }}
           path: release-input
 
       - name: Verify exactly two basename-only inputs
@@ -193,10 +228,10 @@ jobs:
               return
             fi
             set +e
-            python3 - "$collection" "$release_json" <<'PY'
+            python3 - "$collection" "$release_json" "$GITHUB_REF_NAME" <<'PY'
           import json, pathlib, sys
           releases = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          matches = [release for release in releases if release.get("tag_name") == "v0.1.0"]
+          matches = [release for release in releases if release.get("tag_name") == sys.argv[3]]
           if not matches:
               raise SystemExit(44)
           if len(matches) != 1:
@@ -216,10 +251,11 @@ jobs:
           if [[ "$status" == 404 ]]; then
             python3 - "$expected_body" > "$RUNNER_TEMP/create-release.json" <<'PY'
           import json, os, pathlib, sys
+          tag = os.environ["GITHUB_REF_NAME"]
           print(json.dumps({
-              "tag_name": "v0.1.0",
+              "tag_name": tag,
               "target_commitish": os.environ["GITHUB_SHA"],
-              "name": "skylight-private v0.1.0 (unsupported exploration)",
+              "name": f"skylight-private {tag} (unsupported exploration)",
               "body": pathlib.Path(sys.argv[1]).read_text(),
               "draft": True,
               "prerelease": True,
@@ -241,13 +277,14 @@ jobs:
           fi
 
           verify_release() {
-            python3 - "$release_json" "$expected_body" "$GITHUB_SHA" <<'PY'
+            python3 - "$release_json" "$expected_body" "$GITHUB_SHA" "$GITHUB_REF_NAME" <<'PY'
           import json, pathlib, sys
           release = json.loads(pathlib.Path(sys.argv[1]).read_text())
           expected_body = pathlib.Path(sys.argv[2]).read_text()
-          assert release.get("tag_name") == "v0.1.0", release.get("tag_name")
+          tag = sys.argv[4]
+          assert release.get("tag_name") == tag, release.get("tag_name")
           assert release.get("target_commitish") == sys.argv[3], release.get("target_commitish")
-          assert release.get("name") == "skylight-private v0.1.0 (unsupported exploration)", release.get("name")
+          assert release.get("name") == f"skylight-private {tag} (unsupported exploration)", release.get("name")
           assert release.get("body") == expected_body, repr(release.get("body"))
           assert release.get("draft") is True, release.get("draft")
           assert release.get("prerelease") is True, release.get("prerelease")
@@ -351,7 +388,7 @@ jobs:
     needs:
       - gates
       - draft
-    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && github.ref == 'refs/tags/v0.1.0'
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -370,7 +407,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = 'dekopon-agents/dekopon-provider-skylight-private'
           test "$GITHUB_EVENT_NAME" = push
-          test "$GITHUB_REF" = refs/tags/v0.1.0
           git fetch --force origin \
             "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
@@ -379,12 +415,14 @@ jobs:
           test "$tagged" = "$GITHUB_SHA"
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           test "$tagged" = "$(git rev-parse refs/remotes/origin/main)"
-          test "$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')" = 0.1.0
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          test "$GITHUB_REF_NAME" = "v$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Download the two gated files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: provider-skylight-private-v0.1.0
+          name: provider-skylight-private-${{ github.ref_name }}
           path: release-input
 
       - name: Verify exactly two basename-only inputs
@@ -416,7 +454,8 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          image=ghcr.io/dekopon-agents/provider-skylight-private:0.1.0
+          # The OCI tag carries no leading "v"; the git tag does.
+          image="ghcr.io/dekopon-agents/provider-skylight-private:$VERSION"
           created=$(git show -s --format=%cI "$GITHUB_SHA")
           manifest="$RUNNER_TEMP/manifest.json"
           descriptor="$RUNNER_TEMP/descriptor.json"
@@ -495,3 +534,66 @@ jobs:
           assert pathlib.PurePath(title).name == title, title
           PY
           echo "GHCR state $state verified against the gated Wasm layer"
+
+  publish:
+    name: Publish the verified prerelease
+    needs:
+      - gates
+      - attest
+      - draft
+      - ghcr
+    if: github.repository == 'dekopon-agents/dekopon-provider-skylight-private' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Publish only the draft this run verified
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          collection="$RUNNER_TEMP/releases.json"
+          status=$(curl --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --header "Authorization: Bearer $RELEASE_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "$collection" --write-out '%{http_code}' \
+            "$api/releases?per_page=100")
+          test "$status" = 200
+          release_id=$(python3 - "$collection" "$GITHUB_REF_NAME" "$GITHUB_SHA" <<'PY'
+          import json, pathlib, sys
+          releases = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          matches = [release for release in releases if release.get("tag_name") == sys.argv[2]]
+          assert len(matches) == 1, matches
+          release = matches[0]
+          assert release.get("draft") is True, release.get("draft")
+          assert release.get("prerelease") is True, release.get("prerelease")
+          assert release.get("target_commitish") == sys.argv[3], release.get("target_commitish")
+          names = sorted(asset["name"] for asset in release.get("assets", []))
+          assert names == [
+              "provider-skylight-private.wasm",
+              "provider-skylight-private.wasm.sha256",
+          ], names
+          print(release["id"])
+          PY
+          )
+          status=$(curl --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --request PATCH \
+            --header "Authorization: Bearer $RELEASE_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header 'Content-Type: application/json' \
+            --data '{"draft":false,"prerelease":true}' \
+            --output "$RUNNER_TEMP/published.json" --write-out '%{http_code}' \
+            "$api/releases/$release_id")
+          test "$status" = 200
+          python3 - "$RUNNER_TEMP/published.json" "$GITHUB_REF_NAME" <<'PY'
+          import json, pathlib, sys
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert release.get("tag_name") == sys.argv[2], release.get("tag_name")
+          assert release.get("draft") is False, release.get("draft")
+          assert release.get("prerelease") is True, release.get("prerelease")
+          PY

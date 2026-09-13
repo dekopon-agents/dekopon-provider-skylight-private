@@ -6,7 +6,7 @@
 > applicable terms or trigger account enforcement. This is not a production integration.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1` with exactly two ordered Medium-risk, read-only, idempotent
+`dekopon.dev/provider/v1alpha1` with exactly two ordered Medium-risk, read-only
 capabilities:
 
 | Capability | Description | Fixed request | Projected output |
@@ -78,7 +78,6 @@ constraintSets:
     provider: skylight-private
     effect: read-only
     risk: Medium
-    idempotency: idempotent
     credential: skylight-poc-bearer
     constraints:
       timeoutMs: 10000
@@ -94,7 +93,6 @@ constraintSets:
     provider: skylight-private
     effect: read-only
     risk: Medium
-    idempotency: idempotent
     credential: skylight-poc-bearer
     constraints:
       timeoutMs: 10000
@@ -142,11 +140,11 @@ is not embedded.
 
 ## Build and verification
 
-The only compiler provenance is exact Rust 1.89.0. Component composition uses exact `wasm-tools`
-1.236.1. All Dekopon dependencies are exact crates.io 0.11.1 pins; there are no Git, path,
+The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
+1.259.0. All Dekopon dependencies are exact crates.io 0.13.0 pins; there are no Git, path,
 symlink, submodule, or adjacent-checkout dependencies. The repository owns only its composed WIT
 world. Its two dependency WIT mirrors are checked byte-for-byte against the resolved crates.io
-0.11.1 package contents, not trusted by a local hash.
+0.13.0 package contents, not trusted by a local hash.
 
 ```console
 scripts/validate-source.sh
@@ -166,12 +164,15 @@ scripts/check-reproducible.sh
 
 `build.sh` writes only ignored files under `target/` and `dist/`: an intermediate core module, the
 component, and its checksum. The inventory and CycloneDX SBOM are deterministic generated outputs.
-No Wasm, checksum, or SBOM is tracked. The immutable `v0.1.0` source tag identifies the exact gated
-component in a recoverable prerelease draft, and the same bytes are stored as the sole
-`application/wasm` layer at `ghcr.io/dekopon-agents/provider-skylight-private:0.1.0` under artifact
-type `application/vnd.dekopon.provider.v1+wasm`. Neither artifact is a supported production
-distribution, and neither adds the provider to a default catalog, image, policy, credential set,
-package, or deployment.
+No Wasm, checksum, or SBOM is tracked. Each immutable `v<version>` source tag identifies the exact
+gated component in a GitHub prerelease carrying the component and its checksum, attested with
+`actions/attest-build-provenance`, and the same bytes are stored as the sole `application/wasm`
+layer at `ghcr.io/dekopon-agents/provider-skylight-private:<version>` — the OCI tag drops the
+leading `v` — under artifact type `application/vnd.dekopon.provider.v1+wasm`. Verify a downloaded
+component with `gh attestation verify provider-skylight-private.wasm --owner dekopon-agents`. The
+first tag, `v0.1.0`, never left draft; `v0.2.0` is the first published prerelease. Neither artifact
+is a supported production distribution, and neither adds the provider to a default catalog, image,
+policy, credential set, package, or deployment.
 
 All behavior tests use synthetic in-memory responses. The component-host test implements the sole
 WIT import in memory and opens no socket. The real broker host is used only for pre-network

@@ -18,7 +18,13 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
-exceptions = []
+# Wasmtime 48 reaches this graph only through the SDK's non-default `host` feature, which the
+# dev-dependency broker host turns on; `security/wasm-dependencies.txt` records that neither it
+# nor encoding_rs is compiled into the shipped component. Named per crate so a BSD-3-Clause crate
+# that does reach the shipped closure still fails.
+exceptions = [
+  { name = "encoding_rs", version = "=0.8.35", allow = ["BSD-3-Clause"] },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -22,8 +22,8 @@ for table_name in ("dependencies", "dev-dependencies", "build-dependencies"):
             raise SystemExit(f"error: {table_name}.{name} is a local or Git dependency")
         if not version.startswith("="):
             raise SystemExit(f"error: {table_name}.{name} is not an exact crates.io pin: {version!r}")
-        if name.startswith("dekopon-") and version != "=0.11.1":
-            raise SystemExit(f"error: {table_name}.{name} must be exactly =0.11.1")
+        if name.startswith("dekopon-") and version != "=0.13.0":
+            raise SystemExit(f"error: {table_name}.{name} must be exactly =0.13.0")
 lock = tomllib.loads((root / "Cargo.lock").read_text())
 for package in lock["package"]:
     source = package.get("source")
@@ -49,8 +49,8 @@ root = Path(sys.argv[1])
 metadata = json.loads(Path(sys.argv[2]).read_text())
 packages = metadata["packages"]
 expected = {
-    ("dekopon-provider-sdk", "0.11.1"): "wit/provider.wit",
-    ("dekopon-provider-http", "0.11.1"): "wit/deps/http.wit",
+    ("dekopon-provider-sdk", "0.13.0"): "wit/provider.wit",
+    ("dekopon-provider-http", "0.13.0"): "wit/deps/http.wit",
 }
 resolved = {}
 for package in packages:
@@ -62,8 +62,8 @@ for package in packages:
 if set(resolved) != set(expected):
     raise SystemExit(f"error: missing resolved WIT owner(s): {set(expected) - set(resolved)}")
 comparisons = [
-    (root / "wit/deps/provider.wit", resolved[("dekopon-provider-sdk", "0.11.1")]),
-    (root / "wit/deps/http.wit", resolved[("dekopon-provider-http", "0.11.1")]),
+    (root / "wit/deps/provider.wit", resolved[("dekopon-provider-sdk", "0.13.0")]),
+    (root / "wit/deps/http.wit", resolved[("dekopon-provider-http", "0.13.0")]),
 ]
 for mirror, owner in comparisons:
     if mirror.read_bytes() != owner.read_bytes():
@@ -75,8 +75,8 @@ if grep -E '(^|[/ ])(wasi|wasi-core|wasi-ext|wasm-bindgen|js-sys)( |v|$)' "$tree
   exit 1
 fi
 for package in dekopon-provider-http dekopon-provider-sdk; do
-  grep -Eq "^${package} v0\\.11\\.1([[:space:]]|$)" "$tree" || {
-    echo "error: shipped graph does not contain crates.io $package 0.11.1" >&2
+  grep -Eq "^${package} v0\\.13\\.0([[:space:]]|$)" "$tree" || {
+    echo "error: shipped graph does not contain crates.io $package 0.13.0" >&2
     exit 1
   }
 done
