@@ -164,10 +164,10 @@ is not embedded.
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. All Dekopon dependencies are exact crates.io 0.13.0 pins; there are no Git, path,
+1.259.0. All Dekopon dependencies are exact crates.io 0.15.0 pins; there are no Git, path,
 symlink, submodule, or adjacent-checkout dependencies. The repository owns only its composed WIT
 world. Its two dependency WIT mirrors are checked byte-for-byte against the resolved crates.io
-0.13.0 package contents, not trusted by a local hash.
+0.15.0 package contents, not trusted by a local hash.
 
 ```console
 scripts/validate-source.sh

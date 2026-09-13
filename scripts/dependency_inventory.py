@@ -121,9 +121,9 @@ def closure(metadata: dict) -> tuple[list[dict], dict[str, list[str]], str]:
             raise RuntimeError(
                 f"shipped dependency {package['name']} {package['version']} is not from crates.io: {source}"
             )
-        if package["name"].startswith("dekopon-") and package["version"] != "0.13.0":
+        if package["name"].startswith("dekopon-") and package["version"] != "0.15.0":
             raise RuntimeError(
-                f"Dekopon dependency {package['name']} resolved to {package['version']}, not 0.13.0"
+                f"Dekopon dependency {package['name']} resolved to {package['version']}, not 0.15.0"
             )
         checksum = checksums.get((package["name"], package["version"], source))
         if not checksum:

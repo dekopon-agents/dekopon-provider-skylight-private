@@ -7,7 +7,6 @@ cd "$root"
 expected=$(cat <<'EOF'
 .gitattributes
 .github/workflows/ci.yml
-.github/workflows/recover-v0.1.0.yml
 .github/workflows/release.yml
 .gitignore
 Cargo.lock
@@ -70,7 +69,7 @@ manifest = tomllib.loads((root / "Cargo.toml").read_text())
 package = manifest["package"]
 required = {
     "name": "dekopon-skylight-private-provider",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "edition": "2024",
     "rust-version": "1.98.1",
     "repository": "https://github.com/dekopon-agents/dekopon-provider-skylight-private",
@@ -166,25 +165,6 @@ for invariant in [
 ]:
     if invariant not in release:
         raise SystemExit(f"error: idempotent release invariant is missing: {invariant}")
-recovery = (root / ".github/workflows/recover-v0.1.0.yml").read_text()
-if "workflow_dispatch:" not in recovery:
-    raise SystemExit("error: recovery workflow lacks its explicit manual trigger")
-if recovery.count(provider_artifact_type) != 2:
-    raise SystemExit("error: recovery must publish and verify the canonical provider artifact type")
-if "application/vnd.dekopon.provider.component.v1" in recovery:
-    raise SystemExit("error: recovery retains the obsolete provider artifact type")
-if 'descriptor.get("artifactType")' in recovery:
-    raise SystemExit("error: recovery incorrectly requires artifactType on an OCI descriptor")
-for invariant in [
-    "refs/tags/v0.1.0",
-    "git merge-base --is-ancestor",
-    "Select and verify exactly one recoverable draft by immutable ID",
-    "releases?per_page=100",
-    "releases/assets/$asset_id",
-    "GHCR state $state verified against the draft's gated Wasm layer",
-]:
-    if invariant not in recovery:
-        raise SystemExit(f"error: release recovery invariant is missing: {invariant}")
 PY
 
 if grep -REn --include='Cargo.toml' --include='Cargo.lock' \
