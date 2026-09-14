@@ -11,7 +11,7 @@ use serde_json::json;
 
 mod household_cases;
 
-const MAX_COMPONENT_BYTES: u64 = 393_216;
+const MAX_COMPONENT_BYTES: u64 = 589_824;
 const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FUEL: u64 = 128_000_000;
 const MAX_INPUT_BYTES: usize = 4_096;
