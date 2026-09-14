@@ -13,7 +13,7 @@ use wasmtime::{
 
 mod household_cases;
 
-const MAX_COMPONENT_BYTES: u64 = 393_216;
+const MAX_COMPONENT_BYTES: u64 = 589_824;
 const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FUEL: u64 = 128_000_000;
 const MAX_INPUT_BYTES: usize = 4_096;
@@ -595,7 +595,7 @@ fn run_command_proposes_or_renders_without_touching_the_http_import() {
 #[test]
 #[serial_test::serial]
 fn committed_component_limits_are_exact() {
-    assert_eq!(MAX_COMPONENT_BYTES, 393_216);
+    assert_eq!(MAX_COMPONENT_BYTES, 589_824);
     assert_eq!(MAX_MEMORY_BYTES, 32 * 1024 * 1024);
     assert_eq!(MAX_FUEL, 128_000_000);
     assert_eq!(MAX_INPUT_BYTES, 4_096);
@@ -642,6 +642,18 @@ fn household_capabilities_cross_component_boundary_without_ambient_authority() {
             assert_eq!(record["startsAt"], "2028-03-10T23:00:00-05:00");
             assert_eq!(record["endsAt"], "2028-03-14T01:00:00-04:00");
             assert_eq!(record["allDay"], false);
+        }
+        if case.key == "tasks" {
+            assert_eq!(record["status"], "complete");
+            assert_eq!(record["completedAt"], "opaque source time");
+            assert_eq!(
+                record["relationships"]["category"]["data"]["included"],
+                true
+            );
+            assert_eq!(
+                output["included"][0]["relationships"]["family_member"]["data"]["included"],
+                false
+            );
         }
         if case.key == "items" {
             assert!(record["status"].is_null());
@@ -769,6 +781,146 @@ fn calendar_escaped_text_output_budget_stays_within_committed_limits() {
         response_bytes,
         encoded.len(),
         records,
+        store.data().limits.peak_memory_bytes,
+        MAX_FUEL - store.get_fuel().unwrap(),
+        started.elapsed().as_millis()
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn tasks_descending_near_limit_and_malformed_recurrence_tail_preserve_runtime_limits() {
+    for malformed in [false, true] {
+        let mut body = near_limit_frame_body(false, RecordOrder::Descending);
+        if malformed {
+            body.truncate(body.len() - 2);
+            body.extend_from_slice(
+                br#",{"id":"tail","attributes":{"recurrence_set":["RRULE:FREQ=DAILY",false]}}]}"#,
+            );
+        }
+        assert_household_increment_limits(body, "tasks", malformed);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn included_and_linkage_descending_tails_preserve_runtime_limits() {
+    for malformed in [false, true] {
+        let mut included: Vec<_> = (0..6_000)
+            .rev()
+            .map(|i| json!({"id":format!("{i:04}"),"type":"category"}))
+            .collect();
+        if malformed {
+            included.push(json!({"id":"tail","type":"category","attributes":{"label":false}}));
+        }
+        assert_household_increment_limits(
+            serde_json::to_vec(&json!({"data":[],"included":included})).unwrap(),
+            "tasks",
+            malformed,
+        );
+        let mut links: Vec<_> = (0..6_000)
+            .rev()
+            .map(|i| json!({"id":format!("{i:04}"),"type":"category"}))
+            .collect();
+        if malformed {
+            links.push(json!({"id":"tail","type":false}));
+        }
+        assert_household_increment_limits(serde_json::to_vec(&json!({"data":[{"id":"event-test","relationships":{"categories":{"data":links}}}]})).unwrap(), "events", malformed);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn rich_tasks_included_and_escaped_output_remain_bounded() {
+    let data: Vec<_> = (0..36).rev().map(|i| json!({
+        "id":format!("{i:03}"), "type":"chore", "attributes":{
+            "summary":"\0".repeat(200),"description":"\0".repeat(200),"status":"unknown-status",
+            "start":"2028-03-11","recurring":true,"recurrence_set":vec!["R".repeat(200);8]
+        },"relationships":{"category":{"data":{"id":format!("{i:03}"),"type":"category"}}}
+    })).collect();
+    let included: Vec<_> = (0..64).rev().map(|i| json!({"id":format!("{i:03}"),"type":"category","attributes":{"label":"\0".repeat(100)},"relationships":{"family_member":{"data":{"id":format!("member-{i:03}"),"type":"family_member"}}}})).collect();
+    assert_household_increment_limits(
+        serde_json::to_vec(&json!({"data":data,"included":included})).unwrap(),
+        "tasks",
+        false,
+    );
+}
+
+fn assert_household_increment_limits(body: Vec<u8>, key: &str, malformed: bool) {
+    let response_bytes = body.len();
+    assert!(
+        response_bytes > 190_000 && response_bytes <= MAX_RESPONSE_BYTES,
+        "stress response size {response_bytes}"
+    );
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let (capability, input) = if key == "tasks" {
+        (
+            "skylight.private.tasks.list",
+            r#"{"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11","includeLate":true,"includeUpForGrabs":true}"#,
+        )
+    } else {
+        (
+            "skylight.private.calendar.events.list",
+            r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York","include":"categories,calendar_account,event_notification_setting"}"#,
+        )
+    };
+    let encoded = provider
+        .call_invoke(&mut store, capability, input)
+        .expect("bounded household increment must not trap");
+    match serde_json::from_str::<ComponentResponse>(&encoded).unwrap() {
+        ComponentResponse::Succeeded { output } if !malformed => {
+            assert_eq!(output["truncated"], true);
+            assert_eq!(output["upstreamCompleteness"], "unknown");
+            let records = output[key].as_array().unwrap();
+            assert!(records.len() <= 64);
+            assert!(output["included"].as_array().unwrap().len() <= 64);
+            for window in records.windows(2) {
+                assert!(window[0]["id"].as_str().unwrap() < window[1]["id"].as_str().unwrap());
+            }
+            for record in records
+                .iter()
+                .chain(output["included"].as_array().unwrap().iter())
+            {
+                if let Some(relationships) = record
+                    .get("relationships")
+                    .and_then(serde_json::Value::as_object)
+                {
+                    for r in relationships.values() {
+                        let check = |link: &serde_json::Value| {
+                            if link["included"] == true {
+                                assert!(output["included"].as_array().unwrap().iter().any(|r| r["id"] == link["id"] && r["type"] == link["type"]));
+                            }
+                        };
+                        if let Some(links) = r["data"].as_array() {
+                            assert!(links.len() <= 16);
+                            for link in links {
+                                check(link);
+                            }
+                        } else if r["data"].is_object() {
+                            check(&r["data"]);
+                        }
+                    }
+                }
+            }
+        }
+        ComponentResponse::Failed { error } if malformed => {
+            assert_eq!(error.code, "invalid-response");
+            assert_eq!(
+                error.message,
+                "the private API returned an invalid response"
+            );
+        }
+        _ => panic!("unexpected increment projection"),
+    }
+    assert!(encoded.len() < MAX_OUTPUT_BYTES);
+    assert_eq!(store.data().requests.len(), 1);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    assert!(store.get_fuel().unwrap() > 0);
+    assert!(started.elapsed() < TIMEOUT);
+    eprintln!(
+        "household increment: key={key} malformed={malformed} response={response_bytes} envelope={} memory={} fuel={} elapsed-ms={}",
+        encoded.len(),
         store.data().limits.peak_memory_bytes,
         MAX_FUEL - store.get_fuel().unwrap(),
         started.elapsed().as_millis()

@@ -4,21 +4,22 @@
 > not affiliated with, endorsed by, or supported by Skylight. Skylight publishes no public API for
 > these routes; they can change without notice, and using them may violate applicable terms or
 > trigger account enforcement. Source-backed contracts and synthetic tests are not official support.
-> **Live household validation is pending.** No subscription tier is inferred from HTTP errors.
+> **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its seven ordered capabilities are independently grantable,
+`dekopon.dev/provider/v1alpha1`. Its eight ordered capabilities are independently grantable,
 Medium-risk and read-only. All requests use `https://app.ourskylight.com/api`:
 
 | Capability | GET route | Small projection |
 |---|---|---|
 | `skylight.private.account.read` | `/user` | `account.id` only (not full Python `whoami`) |
 | `skylight.private.frames.list` | `/frames` | At most 32 sorted frame IDs and optional names |
-| `skylight.private.categories.list` | `/frames/{frameId}/categories` | `categories`: IDs and nullable labels, **not person identities** |
-| `skylight.private.calendar.events.list` | `/frames/{frameId}/calendar_events?date_min=…&date_max=…&timezone=…` | `events`: IDs, nullable summary, startsAt, endsAt, allDay |
-| `skylight.private.lists.list` | `/frames/{frameId}/lists` | `lists`: IDs and nullable labels |
-| `skylight.private.lists.read` | `/frames/{frameId}/lists/{listId}` | `list`: ID and nullable label |
-| `skylight.private.list.items.list` | `/frames/{frameId}/lists/{listId}/list_items` | `items`: IDs, nullable label, section, status |
+| `skylight.private.categories.list` | `/frames/{frameId}/categories` | `categories`: IDs, labels, profile flags, family-member linkage; no inferred identity |
+| `skylight.private.calendar.events.list` | `/frames/{frameId}/calendar_events?date_min=…&date_max=…&timezone=…[&include=…]` | `events`: source times, summaries, recurrence, multiple category linkages |
+| `skylight.private.lists.list` | `/frames/{frameId}/lists` | `lists`: labels, kind/color/flags, linked included items |
+| `skylight.private.lists.read` | `/frames/{frameId}/lists/{listId}` | `list`: metadata and linked included items; section count only |
+| `skylight.private.list.items.list` | `/frames/{frameId}/lists/{listId}/list_items` | `items`: labels, source status, section, position/draft, list linkage |
+| `skylight.private.tasks.list` | `/frames/{frameId}/chores?after=…&before=…&include_late=…&include_up_for_grabs=…&filter=linked_to_profile` | `tasks`: source status/dates/recurrence, separate assignment and completion-category linkage |
 
 The legacy manifest description remains `Unsupported private Skylight account and frame reads over
 broker HTTP`. The command word is `skylight`. Original account/frames inputs and outputs are unchanged.
@@ -30,13 +31,14 @@ broker HTTP`. The command word is `skylight`. Original account/frames inputs and
 | `account` | exactly `{}` |
 | `frames` | exactly `{}` |
 | `categories --frame ID` | `frameId` |
-| `events --frame ID --from DATE --to DATE --tz ZONE` | `frameId`, `dateMin`, `dateMax`, `timezone` |
+| `events --frame ID --from DATE --to DATE --tz ZONE [--include categories,calendar_account,event_notification_setting]` | `frameId`, `dateMin`, `dateMax`, `timezone`; optional singleton string `include` |
+| `tasks --frame ID --after DATE --before DATE [--include-late true\|false] [--include-up-for-grabs true\|false] [--filter linked_to_profile]` | `frameId`, `after`, `before`; optional booleans `includeLate`, `includeUpForGrabs`, singleton string `filter` |
 | `lists --frame ID` | `frameId` |
 | `list-show --frame ID --list ID` | `frameId`, `listId` |
 | `list-items --frame ID --list ID` | `frameId`, `listId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
-All selectors are required strings. Flags can be reordered, but not repeated; no positional IDs,
+Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered, but not repeated; no positional IDs,
 `--flag=value`, implicit frame, per-command help, stdin JSON, or transport escape hatch is accepted.
 Unknown/missing/duplicate flags and invalid values return a fixed sanitized usage error, exit 2.
 Piped input is ignored. Every input schema has `additionalProperties:false`; duplicate wire JSON
@@ -46,7 +48,7 @@ parsing never grants authority or contacts HTTP.
 
 Frame/list selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
 query delimiters and control characters are rejected. Query values are percent-encoded (including
-`/` in timezones and `+` in `Etc/GMT+5`). No URL, method, include, page, cursor, header, body, token,
+`/` in timezones and `+` in `Etc/GMT+5`). No URL, method, arbitrary include, page, cursor, header, body, token,
 assignee or completion selector is accepted. Unknown capability takes precedence over invalid JSON.
 
 ### Calendar boundaries and interpretation
@@ -54,7 +56,8 @@ assignee or completion selector is accepted. Unknown capability takes precedence
 Dates are real Gregorian `YYYY-MM-DD` values (years 0001–9999). Require **1–31 days between** `--from`
 and `--to`; equal dates, reversed ranges and longer intervals fail before HTTP. This is provider
 policy, not a discovered upstream limit. For a daily query, explicitly pass that day's date and the
-next date. The provider sends both as local `T00:00:00` boundaries with the explicit `--tz` value.
+next date. The provider now sends **date-only** values with the explicit `--tz` value, matching
+the verified browser client (previous midnight suffix construction was not live verified).
 It does **not** claim verified upstream inclusive/exclusive boundaries, expand recurrence, clip
 multiday events, convert offsets or compute “today.” DST changes do not trigger a guessed 24-hour
 UTC conversion. Timezones are syntactically bounded to 1–128 ASCII letters/digits/`_`/`+`/`-`/`/`,
@@ -66,21 +69,58 @@ Source `starts_at` and `ends_at` strings are preserved verbatim as `startsAt`/`e
 preserves offsets, date-only all-day values and multiday crossings. Missing/null timing is unknown.
 Missing/null `all_day` becomes `allDay:null`, distinct from `false` and `true`.
 
-**This subset cannot answer outstanding Tasks today or a specific person's complete docket.**
-Categories are labels, not profiles or verified identities; duplicate names do not resolve a person.
-Event relationships/assignments are not projected because their GET contract is unproven. Missing,
-null or unknown assignment never means the requested person. Calendar summaries and source times
-can provide evidence for a **tentative** upcoming-trip interpretation by the caller, not confirmed
-bookings, destinations or an exhaustive itinerary. Do not claim a complete agenda from an empty or
-bounded page.
+### Verified scoped parameters and Tasks interpretation
 
-**Tasks are deferred, not renamed to lists, chores or task-box.** The pinned Python source exposes
-`list_chores` with opaque query parameters and distinct task-box/list-item reads, but does not prove
-the user-facing Tasks GET/date/assignee/occurrence contract. Chore completion writes identify a
-series plus `instance_date`, `instance_time`, `category_id` and status; series-level completion must
-never imply completion of every recurring occurrence. No Tasks/chores/task-box capability ships.
-List-item status is only `pending`, `completed`, or `null` (missing/null/unrecognized source status).
-Even `pending` establishes neither due date nor assignee; it is not “my outstanding tasks.”
+The calendar `include` input is optional for compatibility. If supplied, the **only accepted string**
+is `categories,calendar_account,event_notification_setting`, exactly the successful browser request.
+Individual tokens, reordered/subset CSV, singular Python mock `category`, arbitrary include paths,
+and any other backend parameters are unsupported/unverified. Omission is not a verified server
+default. Categories, lists, list detail and list-items expose **no query parameters** in the audited
+client methods. No generic kwargs/JSON/query forwarding or pagination options are added. No frame
+metadata endpoint is necessary: calendar still requires an explicit timezone; Tasks has no verified
+timezone parameter. Account/frames semantics, including no include-deleted flag, remain unchanged.
+
+`tasks` reads `/chores`, not lists or task-box. `after` and `before` are Gregorian date-only strings,
+**0–31 days apart** (provider bound). Equal endpoints are verified for the UI-selected day. Use the
+same selected date for both; do not substitute the calendar's next-day interval. Defaults for both
+inclusion booleans are **false**, taken from current client source, not inferred server defaults.
+The provider always sends both flags and `filter=linked_to_profile`; the optional filter input is
+constrained to that singleton. All four boolean combinations were browser-observed working.
+To match the observed Today inclusion settings, explicitly supply both flags as true:
+
+```console
+skylight tasks --frame FRAME_ID --after YYYY-MM-DD --before YYYY-MM-DD --include-late true --include-up-for-grabs true
+```
+
+The caller must supply the selected date: no clock, implicit timezone, or guessed “today.” Arbitrary
+multi-day inclusivity, late-task lookback, set-theoretic inclusion guarantees, timezone/DST behavior,
+recurrence expansion and occurrence-versus-series uniqueness remain unknown. No server completed,
+skipped, profile/assignee or outstanding predicate is invented: the browser filters `complete`,
+`skipped` and disabled profiles locally, with recurrence/date logic beyond a simple status test.
+
+Task `status` preserves bounded source text: live `pending`/`complete`, source-only `skipped`, and
+unknown future statuses. `group`, `series`, `start`, `completedAt` are bounded opaque source strings,
+not occurrence IDs, parsed timestamps or completion guarantees. `completed_at` string/null was
+observed, but its timestamp format is unknown. `completedOnState`, `recurringUntilState` and
+`startTimeState` are `null-or-missing` or `unverified-non-null`; unverified non-null values are never
+forwarded. Recurrence strings are retained without interpreting RRULEs. A completion-category
+relationship is **not** the assignment category. List item `status` retains the legacy
+`pending`/`completed`/null projection; new `sourceStatus` preserves unknown source text separately.
+List-item status does not establish due date, assignee, or outstanding Tasks.
+
+Task→`category`, event→`categories[]`, and category→nullable `family_member` linkage are retained.
+Included records are hydrated into a bounded top-level `included` collection, keyed by **type and
+ID**, not label. Each linkage has `included:true` only when that exact pair survives in the output;
+`false` means unresolved (possibly locally omitted), **not unassigned**. Missing/null relationship
+objects remain unknown; explicit `{data:null}` differs from an empty linkage array. Included
+category stubs may lack family-member evidence. Never treat every category as a person, use a
+completion category as assignment, or resolve duplicate labels to a partner. Family-member
+attributes, notification/account attributes and unknown resource-specific fields are unverified;
+`attributesCoverage` explicitly denotes a small known-field subset, not full hydration.
+
+This can supply evidence for tentative household questions, **not a complete outstanding-today
+answer, partner docket, trip itinerary, booking or agenda**. Empty/bounded responses, recurrence,
+unknown statuses and unresolved linkage must remain visible limitations.
 
 ## Bounded contract and projection
 
@@ -103,15 +143,27 @@ frame name/label must be strings (including null being invalid); nonempty name w
 Names over 256 bytes use a UTF-8-safe prefix plus `…` within 256 bytes; `nameTruncated` is always
 present. Frame `truncated` retains its legacy record-omission semantics, **not** upstream completeness.
 
-New list outputs retain at most 64 ID-sorted records; list detail returns one object. Every known
+Household outputs retain at most 64 ID-sorted primary records; list detail returns one object
+(or null with `truncated:true` if its whole projection cannot fit). Included resources independently
+retain at most 64 deterministically sorted type/ID pairs. Linkage arrays independently retain at
+most 16 sorted pairs; recurrence arrays retain at most 16 source-order strings. Every known
 field and duplicate ID/member is validated even in a discarded tail. JSON objects cannot be
 positional arrays. Missing attributes defaults to unknown fields, but present nonobject attributes
 fails. Missing/null optional fields are unknown; malformed known types fail closed. Unknown
-resource fields, relationships, included resources, pagination links and metadata are discarded.
-Source text (label, summary, section) is capped to 256 UTF-8 bytes with `…`; `textTruncated` marks
-local text loss per record. New `truncated` marks any local text loss or count/byte omission; whole
+fields, unrecognized relationships and pagination links are not forwarded. A shared typed attribute
+decoder validates recognized names/types even for discarded records. Useful included categories,
+list items, avatars and typed resource stubs are retained, without URLs/emails or arbitrary raw JSON.
+`meta.sections` is counted only: populated element schema is unknown; nonempty sections imply local
+omission (`truncated:true`), empty arrays yield zero, missing/null yields null.
+Source text (labels, summaries, descriptions, statuses, section) is capped to 256 UTF-8 bytes with `…`; `textTruncated` marks
+local text loss per record. Record/top-level `truncated` also marks rule/linkage count loss;
+`rruleTruncated`/`recurrenceSetTruncated` and linkage-array `truncated` make those omissions explicit.
+Top-level `truncated` marks any local text/count/byte/section omission; whole
 records are omitted to keep projected JSON at most 32,640 bytes and the SDK envelope below 32 KiB.
-All new outputs include `coverage:"bounded-response"` and `upstreamCompleteness:"unknown"`.
+All new outputs include `projection:"typed-subset"`, `coverage:"bounded-response"`,
+`upstreamCompleteness:"unknown"` and explicit linkage/included/section coverage states.
+Combined output budgeting accounts for JSON escaping once per retained candidate; included records
+are dropped first, then primary records, and surviving linkage flags are resolved afterward.
 **`truncated:false` means no local loss, not an exhaustive upstream result.** No pagination is fetched.
 Household text remains untrusted sensitive metadata, not instructions or declassified data.
 
@@ -217,18 +269,16 @@ Audit pinned to `joshuaswarren/pyskylight@69e4576b9035d71aacda9ade7a4afea05a663e
 There are **54 ordinary reads, 88 actions, 2 auth commands and 2 sensitive GET helpers**. “Ordinary
 read” is a source classification, not a safety grant. Actions include mutations, code/link generation
 and uploads; even sensitive GET helpers are not ordinary household reads. No mutation/auth command
-or sensitive helper is implemented. Tasks is an unresolved product concept, not an extra registered
-Python command. All names below are Python registrations, not promises of provider aliases.
+or sensitive helper is implemented. Tasks is now supported through the browser-verified chores
+route, not an extra Python registration. All names below are Python registrations, not aliases.
 
-**Partial** means source-compatible route with intentionally reduced arguments/output, not Python
-CLI parity. Provider `events` matches Python `--frame/--from/--to/--tz`, but requires date-only inputs,
-explicit frame/zone and bounded range; Python forwards datetime text and supports `--include`.
-Provider list detail/items use `--list ID`, rather than Python's positional list ID. There is no
-implicit configured frame. Categories/calendar field contracts have model/source evidence; list
-labels have synthetic upstream test evidence. List-item label/status/section are candidate fields
-from source write methods; nonempty GET response shape is **not live verified**. Provider tests use
-invented fixtures, not captured responses. A Python method's presence is neither an official API
-contract nor live household coverage. HTTP403 remains a generic refusal, not a Premium diagnosis.
+**Partial** means source-compatible route with intentionally bounded arguments/output. Provider
+`events` supports Python's named frame/from/to/tz/include parameters with a stricter evidenced
+include singleton and date-only bounded range. Provider detail/items use `--list ID` rather than
+Python's positional ID. There is no implicit configured frame. Chores parameters come from the
+verified browser/current public client, not Python's opaque kwargs. Browser observations establish
+working reads, not successful native broker HTTP. The separate list-items GET is **source-only**;
+list index and populated detail included items were browser-observed. Every test fixture is synthetic.
 
 | Python command | Source class | Provider support |
 |---|---|---|
@@ -237,11 +287,11 @@ contract nor live household coverage. HTTP403 remains a generic refusal, not a P
 | `whoami` | Read | Partial: `account`, ID only |
 | `frames` | Read | Partial: bounded IDs/names; no include-deleted |
 | `frame` | Read | Not implemented; out of scope |
-| `events` | Read | Partial: bounded source times/summaries; no include/assignment |
+| `events` | Read | Partial: bounded dates/zone, optional verified include, source times/recurrence/category linkage |
 | `event-add` | Action | Not implemented; out of scope |
 | `event-update` | Action | Not implemented; out of scope |
 | `event-delete` | Action | Not implemented; out of scope |
-| `categories` | Read | Partial: IDs/labels only, not person profiles |
+| `categories` | Read | Partial: labels/flags/family-member linkage; no inferred profiles |
 | `meal-categories` | Read | Not implemented; out of scope |
 | `recipes` | Read | Not implemented; out of scope |
 | `recipe` | Read | Not implemented; out of scope |
@@ -253,12 +303,12 @@ contract nor live household coverage. HTTP403 remains a generic refusal, not a P
 | `plan-add` | Action | Not implemented; out of scope |
 | `plan-update` | Action | Not implemented; out of scope |
 | `plan-remove` | Action | Not implemented; out of scope |
-| `lists` | Read | Partial: IDs/labels only |
+| `lists` | Read | Partial: metadata and linked included items |
 | `list-add` | Action | Not implemented; out of scope |
-| `chores` | Read | Deferred: not proven Tasks |
+| `chores` | Read | Partial: `tasks`, verified dates/flags/filter and typed source chores |
 | `plan-show` | Read | Not implemented; out of scope |
-| `list-show` | Read | Partial: ID/label, `--list` selector |
-| `list-items` | Read | Partial: labels/section/status; candidate GET fields |
+| `list-show` | Read | Partial: metadata/included items, section count, `--list` selector |
+| `list-items` | Read | Partial: typed labels/source status/section/linkage; route source-only |
 | `category` | Read | Not implemented; out of scope |
 | `update-meal-category` | Action | Not implemented; out of scope |
 | `chore-add` | Action | Not implemented; out of scope |
@@ -431,3 +481,23 @@ HTTP import. There is no tracked `security/` directory in this repository; the c
 memory, and timeout ceilings and measured headroom now live only as the `MAX_*`/`TIMEOUT*`
 constants and the `committed_component_limits_are_exact` / `committed_broker_limits_are_exact`
 tests in `tests/component_host.rs` and `tests/broker_host.rs`.
+
+### Read-contract evidence and resource-budget increment
+
+The scoped Python audit is pinned above. Two authorized browser studies observed successful GETs
+on the designated calendar (19 prior schema observations, then 14 parameter/hydration observations).
+The latter verified Tasks flags/filter, same-day selected dates, calendar date-only/include requests,
+and populated list detail. Current public page source symbols `getChores`, `getCalendarEvents`,
+`getCategories`, `getLists`, `getList`, `getListItems` corroborated the parameter inventory; the exact
+bundle asset path was not retained. That inventory is **not exhaustive backend documentation**.
+Individual calendar include subsets, server omission/default rules, pagination, completion transitions,
+recurrence-instance semantics, section schemas and complete household coverage remain unverified.
+Successful browser reads use the browser's separate authentication context; native broker HTTP
+success still requires separately authorized validation. No credential/session data is in fixtures.
+
+The typed Tasks/relationships/included decoder requires a parent-approved component artifact ceiling
+of **589,824 bytes (576 KiB)**, replacing 393,216 bytes. This changes only the artifact-size gate:
+**128,000,000 fuel, 32 MiB guest memory, ten seconds, one GET, 4 KiB input/request, 256 KiB response,
+and <32 KiB component output are unchanged**. No dependencies, compiler profiles, shared CI or
+ambient imports are added. Minimal records retain lazy boxed attributes/relationships and only the
+final selected resources are projected, preserving descending-input resource bounds.

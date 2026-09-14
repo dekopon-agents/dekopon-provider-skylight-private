@@ -647,7 +647,7 @@ mod tests {
         let manifest = SkylightPrivate::manifest();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 7);
+        assert_eq!(manifest.capabilities.len(), 8);
         assert_eq!(
             manifest
                 .capabilities

@@ -21,7 +21,8 @@ Commands:
   account  Read the bearer-selected account identifier (skylight.private.account.read)
   frames   List visible frame identifiers and optional names (skylight.private.frames.list)
   categories --frame ID
-  events --frame ID --from DATE --to DATE --tz ZONE
+  events --frame ID --from DATE --to DATE --tz ZONE [--include categories,calendar_account,event_notification_setting]
+  tasks --frame ID --after DATE --before DATE [--include-late true|false] [--include-up-for-grabs true|false] [--filter linked_to_profile]
   lists --frame ID
   list-show --frame ID --list ID
   list-items --frame ID --list ID
@@ -30,7 +31,8 @@ Commands:
 Options:
   -h, --help  Print this help
 
-Account and frames take no flags. Dates: YYYY-MM-DD, 1..31 days between midnights.
+Account and frames take no flags. Dates: YYYY-MM-DD; events 1..31, tasks 0..31 days apart.
+Tasks inclusion defaults are false (client defaults, not Today UI settings).
 Explicit timezone required; upstream boundary semantics and completeness unknown.
 Lists are not Tasks; categories do not establish person identity.
 ";
@@ -60,12 +62,13 @@ pub(crate) fn run(argv: &[String], _stdin: Option<&str>) -> CommandRun {
     let read = match verb.as_str() {
         "categories" => Read::Categories,
         "events" => Read::Events,
+        "tasks" => Read::Tasks,
         "lists" => Read::Lists,
         "list-show" => Read::List,
         "list-items" => Read::Items,
         _ => return error(),
     };
-    if argv.len() != 1 + 2 * read.fields().len() {
+    if argv.len() > 1 + 2 * read.fields().len() || argv.len() % 2 != 1 {
         return error();
     }
     let mut input = serde_json::Map::new();
@@ -73,7 +76,16 @@ pub(crate) fn run(argv: &[String], _stdin: Option<&str>) -> CommandRun {
         let Some((_, field)) = read.fields().iter().find(|(flag, _)| *flag == pair[0]) else {
             return error();
         };
-        if input.insert((*field).to_owned(), json!(pair[1])).is_some() {
+        let value = if matches!(*field, "includeLate" | "includeUpForGrabs") {
+            match pair[1].as_str() {
+                "true" => json!(true),
+                "false" => json!(false),
+                _ => return error(),
+            }
+        } else {
+            json!(pair[1])
+        };
+        if input.insert((*field).to_owned(), value).is_some() {
             return error();
         }
     }
@@ -112,7 +124,8 @@ Commands:
   account  Read the bearer-selected account identifier (skylight.private.account.read)
   frames   List visible frame identifiers and optional names (skylight.private.frames.list)
   categories --frame ID
-  events --frame ID --from DATE --to DATE --tz ZONE
+  events --frame ID --from DATE --to DATE --tz ZONE [--include categories,calendar_account,event_notification_setting]
+  tasks --frame ID --after DATE --before DATE [--include-late true|false] [--include-up-for-grabs true|false] [--filter linked_to_profile]
   lists --frame ID
   list-show --frame ID --list ID
   list-items --frame ID --list ID
@@ -121,7 +134,8 @@ Commands:
 Options:
   -h, --help  Print this help
 
-Account and frames take no flags. Dates: YYYY-MM-DD, 1..31 days between midnights.
+Account and frames take no flags. Dates: YYYY-MM-DD; events 1..31, tasks 0..31 days apart.
+Tasks inclusion defaults are false (client defaults, not Today UI settings).
 Explicit timezone required; upstream boundary semantics and completeness unknown.
 Lists are not Tasks; categories do not establish person identity.
 ";
