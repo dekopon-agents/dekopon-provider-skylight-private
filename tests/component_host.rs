@@ -23,6 +23,9 @@ const MAX_OUTPUT_BYTES: usize = 32_768;
 const TIMEOUT: Duration = Duration::from_secs(10);
 const NEAR_LIMIT_FRAME_COUNT: usize = 20_000;
 
+// Every test shares the serial lock: concurrent Wasmtime compilation from even an untimed test
+// otherwise consumes CPU inside another test's unchanged wall-clock budget on small CI runners.
+
 mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
@@ -243,6 +246,7 @@ fn assert_request(request: &Request, uri: &str) {
 /// Wasmtime linker rather than a named import-free host crate so it keeps holding as the Dekopon
 /// tree rearranges its hosts.
 #[test]
+#[serial_test::serial]
 fn immediate_host_refuses_the_sole_privileged_import() {
     let path = component_path();
     let bytes = std::fs::metadata(&path)
@@ -385,6 +389,7 @@ fn in_memory_sole_wit_host_preserves_requests_and_worst_case_projection() {
 }
 
 #[test]
+#[serial_test::serial]
 fn component_boundary_pins_unknown_precedence_and_malformed_json() {
     let (mut store, provider) = instantiate(response(account_body()));
     let cases = [
@@ -523,6 +528,7 @@ fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
 /// `run-command` answers from the guest alone: a proposal, the help page, or the usage error, and
 /// never a call through the HTTP import, whatever argv or piped value arrives.
 #[test]
+#[serial_test::serial]
 fn run_command_proposes_or_renders_without_touching_the_http_import() {
     let (mut store, provider) = instantiate(response(account_body()));
     let mut run = |words: &[&str]| -> CommandRunOutcome {
@@ -600,6 +606,7 @@ fn committed_component_limits_are_exact() {
 }
 
 #[test]
+#[serial_test::serial]
 fn household_capabilities_cross_component_boundary_without_ambient_authority() {
     for case in household_cases::cases() {
         let (mut store, provider) = instantiate(response(serde_json::to_vec(&case.body).unwrap()));
