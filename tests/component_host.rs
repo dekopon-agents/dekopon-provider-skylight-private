@@ -31,11 +31,10 @@ mod bindings {
 use bindings::dekopon::http::client::{Header, HttpError, Request, Response};
 
 fn component_path() -> PathBuf {
-    std::env::var_os("DEKOPON_SKYLIGHT_COMPONENT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist/provider-skylight-private.wasm")
-        })
+    PathBuf::from(
+        std::env::var_os("DEKOPON_PROVIDER_COMPONENT")
+            .expect("DEKOPON_PROVIDER_COMPONENT must point at the built component"),
+    )
 }
 
 #[derive(Default)]
@@ -266,6 +265,7 @@ fn immediate_host_refuses_the_sole_privileged_import() {
 }
 
 #[test]
+#[serial_test::serial]
 fn in_memory_sole_wit_host_preserves_requests_and_worst_case_projection() {
     let path = component_path();
     let mut config = Config::new();
@@ -424,6 +424,7 @@ fn component_boundary_pins_unknown_precedence_and_malformed_json() {
 }
 
 #[test]
+#[serial_test::serial]
 fn near_limit_random_order_projects_within_committed_fuel() {
     let body = near_limit_frame_body(false);
     let response_bytes = body.len();
@@ -470,6 +471,7 @@ fn near_limit_random_order_projects_within_committed_fuel() {
 }
 
 #[test]
+#[serial_test::serial]
 fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
     let body = near_limit_frame_body(true);
     let response_bytes = body.len();
@@ -573,6 +575,7 @@ fn run_command_proposes_or_renders_without_touching_the_http_import() {
 }
 
 #[test]
+#[serial_test::serial]
 fn committed_component_limits_are_exact() {
     assert_eq!(MAX_COMPONENT_BYTES, 393_216);
     assert_eq!(MAX_MEMORY_BYTES, 32 * 1024 * 1024);

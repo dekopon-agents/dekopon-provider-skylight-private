@@ -157,9 +157,10 @@ provenance only; it is not the hash of a standalone release.
 
 Route and response-shape evidence is pinned to
 [`joshuaswarren/pyskylight`](https://github.com/joshuaswarren/pyskylight) commit
-`69e4576b9035d71aacda9ade7a4afea05a663e94`. The complete upstream MIT notice is in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). This is a native Rust reimplementation; Python
-is not embedded.
+`69e4576b9035d71aacda9ade7a4afea05a663e94`. The complete upstream MIT notice, and every other
+dependency's license, is disclosed in the CycloneDX SBOM the shared release workflow attaches to
+each release; there is no tracked `THIRD_PARTY_NOTICES.md` in this repository. This is a native
+Rust reimplementation; Python is not embedded.
 
 ## Build and verification
 
@@ -170,32 +171,35 @@ world. Its two dependency WIT mirrors are checked byte-for-byte against the reso
 0.15.0 package contents, not trusted by a local hash.
 
 ```console
-scripts/validate-source.sh
-scripts/assert-lock-and-feature-graph.sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --lib
-cargo check --locked --target wasm32-unknown-unknown
-./build.sh
-DEKOPON_SKYLIGHT_COMPONENT=dist/provider-skylight-private.wasm \
-  cargo test --locked --test broker_host --test component_host -- --test-threads=1
-scripts/verify-component.sh
-scripts/test-direct-refusal.sh
-scripts/generate-sbom.sh
-scripts/check-reproducible.sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo deny --all-features check bans licenses sources advisories
+../provider-workflows/build.sh
+DEKOPON_PROVIDER_COMPONENT=$PWD/skylight-private-provider.wasm \
+  cargo test --locked --workspace
 ```
 
-`build.sh` writes only ignored files under `target/` and `dist/`: an intermediate core module, the
-component, and its checksum. The inventory and CycloneDX SBOM are deterministic generated outputs.
-No Wasm, checksum, or SBOM is tracked. Each immutable `v<version>` source tag identifies the exact
-gated component in a GitHub prerelease carrying the component and its checksum, attested with
-`actions/attest-build-provenance`, and the same bytes are stored as the sole `application/wasm`
-layer at `ghcr.io/dekopon-agents/provider-skylight-private:<version>` — the OCI tag drops the
-leading `v` — under artifact type `application/vnd.dekopon.provider.v1+wasm`. Verify a downloaded
-component with `gh attestation verify provider-skylight-private.wasm --owner dekopon-agents`. The
-first tag, `v0.1.0`, never left draft; `v0.2.0` is the first published prerelease. Neither artifact
-is a supported production distribution, and neither adds the provider to a default catalog, image,
-policy, credential set, package, or deployment.
+This mirrors the gates `ci / validate` in
+[`dekopon-agents/provider-workflows`](https://github.com/dekopon-agents/provider-workflows) runs:
+formatting, dependency policy, clippy for the host and for `wasm32-unknown-unknown`, the WIT
+mirror check, the component build, a raw wasmtime smoke test, the SBOM, and a byte-for-byte
+rebuild from a clean checkout. There is no local `scripts/` directory or `build.sh` in this
+repository anymore; `../provider-workflows/build.sh` is a sibling checkout of the shared
+workflows repository (see its own README for the exact clone step CI uses).
+
+`build.sh` writes only ignored files under `target/` and the repository root: an intermediate
+core module, the component (`skylight-private-provider.wasm`), and its checksum. The CycloneDX
+SBOM is a release asset the shared workflow generates in CI, not a local or tracked file. Each
+immutable `v<version>` source tag identifies the exact gated component in a GitHub prerelease
+carrying the component and its checksum, attested with `actions/attest-build-provenance`, and the
+same bytes are stored as the sole `application/wasm` layer at
+`ghcr.io/dekopon-agents/provider-skylight-private:<version>` — the OCI tag drops the leading `v`
+— under artifact type `application/vnd.dekopon.provider.v1+wasm`. Verify a downloaded component
+with `gh attestation verify skylight-private-provider.wasm --owner dekopon-agents`. The first tag,
+`v0.1.0`, never left draft; `v0.2.0` is the first published prerelease. A `-` suffix on the tag
+(for example `v0.4.0-pre.1`) marks a prerelease. Neither artifact is a supported production
+distribution, and neither adds the provider to a default catalog, image, policy, credential set,
+package, or deployment.
 
 All behavior tests use synthetic in-memory responses. The component-host test implements the sole
 WIT import in memory and opens no socket. The real broker host is used only for pre-network
@@ -206,5 +210,7 @@ no captured response fixture is permitted.
 The finished component must export only `describe`, `invoke`, and `run-command`, import exactly
 `dekopon:http/client@1.0.0`, and import no WASI, filesystem, environment, clock, random, socket,
 JavaScript, or other ambient interface. The immediate host refuses it because that host provides no
-HTTP import. See [`security/RESOURCE_LIMITS.md`](security/RESOURCE_LIMITS.md) for committed ceilings
-and measured headroom.
+HTTP import. There is no tracked `security/` directory in this repository; the committed fuel,
+memory, and timeout ceilings and measured headroom now live only as the `MAX_*`/`TIMEOUT*`
+constants and the `committed_component_limits_are_exact` / `committed_broker_limits_are_exact`
+tests in `tests/component_host.rs` and `tests/broker_host.rs`.
