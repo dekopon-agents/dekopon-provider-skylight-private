@@ -1,21 +1,11 @@
 //! The `skylight` command word, parsed by hand.
 //!
-//! Both capabilities take exactly `{}`, so the whole grammar is one bare verb. A parser crate would
-//! bring a dependency closure, a license review, and component bytes to a private-data provider for
-//! two words without a flag between them, so argv is matched as a slice.
-//!
-//! `skylight account` and `skylight frames` are *proposals*: the shell authorizes each on the path a
-//! direct invocation takes — constraint-set lookup, Cedar, then credential injection inside the
-//! broker's HTTP engine — and the input is the only one `invoke` accepts. `--help`, `-h`, and
-//! `help` render the help page on stdout at status 0. Every other argv — no verb, an unknown verb,
-//! an extra argument, any flag — renders one fixed usage error on stderr at status 2. Neither page
-//! quotes argv, so caller text never comes back through the word, and piped input never reaches a
-//! proposal.
+//! Strict named selectors only. Parsing never contacts HTTP or reflects caller text.
 
 use dekopon_provider_sdk::CommandRun;
 use serde_json::json;
 
-use crate::{ACCOUNT_CAPABILITY, FRAMES_CAPABILITY};
+use crate::{ACCOUNT_CAPABILITY, FRAMES_CAPABILITY, household::Read};
 
 /// Exit status of the help page.
 const HELP_STATUS: u8 = 0;
@@ -30,16 +20,23 @@ Usage: skylight <COMMAND>
 Commands:
   account  Read the bearer-selected account identifier (skylight.private.account.read)
   frames   List visible frame identifiers and optional names (skylight.private.frames.list)
+  categories --frame ID
+  events --frame ID --from DATE --to DATE --tz ZONE
+  lists --frame ID
+  list-show --frame ID --list ID
+  list-items --frame ID --list ID
   help     Print this help
 
 Options:
   -h, --help  Print this help
 
-Neither command takes arguments or flags.
+Account and frames take no flags. Dates: YYYY-MM-DD, 1..31 days between midnights.
+Explicit timezone required; upstream boundary semantics and completeness unknown.
+Lists are not Tasks; categories do not establish person identity.
 ";
 
 const USAGE_ERROR: &str = "\
-error: expected exactly one command: account or frames
+error: expected a supported command with its exact required flags
 
 Usage: skylight <COMMAND>
 
@@ -48,15 +45,43 @@ For more information, try 'skylight --help'.
 
 /// Runs one `skylight` argv: the arguments after the command word.
 pub(crate) fn run(argv: &[String], _stdin: Option<&str>) -> CommandRun {
-    let [verb] = argv else {
-        return CommandRun::rendered_error(USAGE_ERROR, USAGE_STATUS);
+    let error = || CommandRun::rendered_error(USAGE_ERROR, USAGE_STATUS);
+    let Some(verb) = argv.first() else {
+        return error();
     };
-    match verb.as_str() {
-        "account" => proposal(ACCOUNT_CAPABILITY),
-        "frames" => proposal(FRAMES_CAPABILITY),
-        "--help" | "-h" | "help" => CommandRun::rendered(HELP, HELP_STATUS),
-        _ => CommandRun::rendered_error(USAGE_ERROR, USAGE_STATUS),
+    if argv.len() == 1 {
+        match verb.as_str() {
+            "account" => return proposal(ACCOUNT_CAPABILITY),
+            "frames" => return proposal(FRAMES_CAPABILITY),
+            "--help" | "-h" | "help" => return CommandRun::rendered(HELP, HELP_STATUS),
+            _ => (),
+        }
     }
+    let read = match verb.as_str() {
+        "categories" => Read::Categories,
+        "events" => Read::Events,
+        "lists" => Read::Lists,
+        "list-show" => Read::List,
+        "list-items" => Read::Items,
+        _ => return error(),
+    };
+    if argv.len() != 1 + 2 * read.fields().len() {
+        return error();
+    }
+    let mut input = serde_json::Map::new();
+    for pair in argv[1..].as_chunks::<2>().0 {
+        let Some((_, field)) = read.fields().iter().find(|(flag, _)| *flag == pair[0]) else {
+            return error();
+        };
+        if input.insert((*field).to_owned(), json!(pair[1])).is_some() {
+            return error();
+        }
+    }
+    let input = serde_json::Value::Object(input);
+    if read.uri(&input).is_err() {
+        return error();
+    }
+    CommandRun::proposal(read.capability().parse().expect("static capability"), input)
 }
 
 fn proposal(capability: &str) -> CommandRun {
@@ -86,16 +111,23 @@ Usage: skylight <COMMAND>
 Commands:
   account  Read the bearer-selected account identifier (skylight.private.account.read)
   frames   List visible frame identifiers and optional names (skylight.private.frames.list)
+  categories --frame ID
+  events --frame ID --from DATE --to DATE --tz ZONE
+  lists --frame ID
+  list-show --frame ID --list ID
+  list-items --frame ID --list ID
   help     Print this help
 
 Options:
   -h, --help  Print this help
 
-Neither command takes arguments or flags.
+Account and frames take no flags. Dates: YYYY-MM-DD, 1..31 days between midnights.
+Explicit timezone required; upstream boundary semantics and completeness unknown.
+Lists are not Tasks; categories do not establish person identity.
 ";
 
     const EXPECTED_USAGE_ERROR: &str = "\
-error: expected exactly one command: account or frames
+error: expected a supported command with its exact required flags
 
 Usage: skylight <COMMAND>
 
@@ -180,9 +212,10 @@ For more information, try 'skylight --help'.
         }
     }
 
-    /// The verbs reach every manifest capability and nothing else, in manifest order.
+    /// Legacy verbs remain the first two manifest capabilities. Household verbs are covered
+    /// by household_routes_are_exact_gets_and_cli_matches_every_manifest_entry.
     #[test]
-    fn the_verbs_propose_exactly_the_manifest_capabilities() {
+    fn legacy_verbs_preserve_manifest_order() {
         let declared = SkylightPrivate::manifest()
             .capabilities
             .iter()
@@ -190,7 +223,7 @@ For more information, try 'skylight --help'.
             .collect::<Vec<_>>();
         let proposed = ["account", "frames"]
             .map(|verb| proposal(&[verb], None).capability.as_str().to_owned());
-        assert_eq!(proposed.to_vec(), declared);
+        assert_eq!(proposed.to_vec(), declared[..2]);
     }
 
     /// What the word proposes is what `invoke` accepts: one fixed request, never `invalid-input`.

@@ -11,6 +11,8 @@ use wasmtime::{
     component::{Component, HasSelf, Linker},
 };
 
+mod household_cases;
+
 const MAX_COMPONENT_BYTES: u64 = 393_216;
 const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FUEL: u64 = 128_000_000;
@@ -124,16 +126,26 @@ fn worst_case_frame_body() -> Vec<u8> {
     serde_json::to_vec(&json!({"data": data})).expect("frame response serializes")
 }
 
-/// Produces the 260,010-byte review probe without a fixture or random dependency. Multiplication by
-/// 7,919 permutes all 20,000 indices, and each selected scalar is exactly three UTF-8 bytes.
-fn near_limit_frame_body(malformed_last: bool) -> Vec<u8> {
+#[derive(Clone, Copy, Debug)]
+enum RecordOrder {
+    Permuted,
+    Descending,
+}
+
+/// Produces a 260,010-byte review probe without a fixture or random dependency. Multiplication by
+/// 7,919 permutes all 20,000 indices; descending order replaces every retained record. Each selected
+/// scalar is exactly three UTF-8 bytes.
+fn near_limit_frame_body(malformed_last: bool, order: RecordOrder) -> Vec<u8> {
     let mut body = Vec::with_capacity(MAX_RESPONSE_BYTES);
     body.extend_from_slice(br#"{"data":["#);
     for position in 0..NEAR_LIMIT_FRAME_COUNT {
         if position != 0 {
             body.push(b',');
         }
-        let index = (position * 7_919 + 1_237) % NEAR_LIMIT_FRAME_COUNT;
+        let index = match order {
+            RecordOrder::Permuted => (position * 7_919 + 1_237) % NEAR_LIMIT_FRAME_COUNT,
+            RecordOrder::Descending => NEAR_LIMIT_FRAME_COUNT - 1 - position,
+        };
         let id = char::from_u32(0x0800 + index as u32).expect("fixture scalar is valid");
         if malformed_last && position + 1 == NEAR_LIMIT_FRAME_COUNT {
             write!(
@@ -426,7 +438,7 @@ fn component_boundary_pins_unknown_precedence_and_malformed_json() {
 #[test]
 #[serial_test::serial]
 fn near_limit_random_order_projects_within_committed_fuel() {
-    let body = near_limit_frame_body(false);
+    let body = near_limit_frame_body(false, RecordOrder::Permuted);
     let response_bytes = body.len();
     let started = Instant::now();
     let (mut store, provider) = instantiate(response(body));
@@ -473,7 +485,7 @@ fn near_limit_random_order_projects_within_committed_fuel() {
 #[test]
 #[serial_test::serial]
 fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
-    let body = near_limit_frame_body(true);
+    let body = near_limit_frame_body(true, RecordOrder::Permuted);
     let response_bytes = body.len();
     let started = Instant::now();
     let (mut store, provider) = instantiate(response(body));
@@ -585,4 +597,173 @@ fn committed_component_limits_are_exact() {
     assert_eq!(MAX_RESPONSE_BYTES, 262_144);
     assert_eq!(MAX_OUTPUT_BYTES, 32_768);
     assert_eq!(TIMEOUT, Duration::from_secs(10));
+}
+
+#[test]
+fn household_capabilities_cross_component_boundary_without_ambient_authority() {
+    for case in household_cases::cases() {
+        let (mut store, provider) = instantiate(response(serde_json::to_vec(&case.body).unwrap()));
+        let argv: Vec<_> = case.argv.iter().map(|s| (*s).to_owned()).collect();
+        let proposed = provider
+            .call_run_command(&mut store, &argv, Some("secret-sentinel"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<CommandRunOutcome>(&proposed).unwrap(),
+            CommandRunOutcome::Proposed {
+                capability: case.capability.parse().unwrap(),
+                input: case.input.clone(),
+                secret_use: None
+            }
+        );
+        assert!(store.data().requests.is_empty());
+        let encoded = provider
+            .call_invoke(&mut store, case.capability, &case.input.to_string())
+            .unwrap();
+        let ComponentResponse::Succeeded { output } = serde_json::from_str(&encoded).unwrap()
+        else {
+            panic!("household read failed");
+        };
+        assert_eq!(output["upstreamCompleteness"], "unknown");
+        assert_eq!(output["coverage"], "bounded-response");
+        let record = if case.key == "list" {
+            &output[case.key]
+        } else {
+            &output[case.key][0]
+        };
+        assert_eq!(record["id"], "sample");
+        if case.key == "events" {
+            assert_eq!(record["startsAt"], "2028-03-10T23:00:00-05:00");
+            assert_eq!(record["endsAt"], "2028-03-14T01:00:00-04:00");
+            assert_eq!(record["allDay"], false);
+        }
+        if case.key == "items" {
+            assert!(record["status"].is_null());
+        }
+        assert!(encoded.len() < MAX_OUTPUT_BYTES);
+        assert_eq!(store.data().requests.len(), 1);
+        assert_request(
+            &store.data().requests[0],
+            &format!(
+                "https://app.ourskylight.com/api/frames/frame-test{}",
+                case.path
+            ),
+        );
+        assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+        assert!(store.get_fuel().unwrap() > 0);
+        for input in [
+            r#"{"frameId":"x","frameId":"y"}"#,
+            r#"{"frameId":null,"frameId":"y"}"#,
+            r#"{"frameId":"x","url":"secret-sentinel"}"#,
+            "{broken",
+        ] {
+            let encoded = provider
+                .call_invoke(&mut store, case.capability, input)
+                .unwrap();
+            assert!(
+                matches!(serde_json::from_str::<ComponentResponse>(&encoded).unwrap(), ComponentResponse::Failed {error} if error.code == "invalid-input" && error.message == "input must match the bounded Skylight read schema")
+            );
+        }
+        assert_eq!(store.data().requests.len(), 1);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn household_near_response_limit_validates_tail_within_unchanged_resource_limits() {
+    assert_household_near_response_limit(RecordOrder::Permuted);
+}
+
+#[test]
+#[serial_test::serial]
+fn household_descending_near_response_limit_validates_tail_within_unchanged_resource_limits() {
+    assert_household_near_response_limit(RecordOrder::Descending);
+}
+
+fn assert_household_near_response_limit(order: RecordOrder) {
+    for malformed in [false, true] {
+        // 20,000 minimal records under 256 KiB exercise streaming retention, not a household fixture.
+        let mut body = near_limit_frame_body(false, order);
+        if malformed {
+            body.truncate(body.len() - 2);
+            body.extend_from_slice(
+                br#",{"id":"tail","attributes":{"all_day":null,"all_day":true}}]}"#,
+            );
+        }
+        let bytes = body.len();
+        let started = Instant::now();
+        let (mut store, provider) = instantiate(response(body));
+        let encoded = provider.call_invoke(&mut store,"skylight.private.calendar.events.list",r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}"#).expect("bounded response must not trap");
+        match serde_json::from_str::<ComponentResponse>(&encoded).unwrap() {
+            ComponentResponse::Succeeded { output } if !malformed => {
+                let events = output["events"].as_array().unwrap();
+                assert_eq!(events.len(), 64);
+                for (index, event) in events.iter().enumerate() {
+                    assert_eq!(
+                        event["id"],
+                        char::from_u32(0x0800 + index as u32).unwrap().to_string()
+                    );
+                    for field in ["summary", "startsAt", "endsAt", "allDay"] {
+                        assert!(event[field].is_null());
+                    }
+                    assert_eq!(event["textTruncated"], false);
+                }
+                assert_eq!(output["coverage"], "bounded-response");
+                assert_eq!(output["truncated"], true);
+                assert_eq!(output["upstreamCompleteness"], "unknown");
+            }
+            ComponentResponse::Failed { error } if malformed => {
+                assert_eq!(error.code, "invalid-response");
+                assert_eq!(
+                    error.message,
+                    "the private API returned an invalid response"
+                );
+            }
+            _ => panic!("unexpected projection result"),
+        }
+        assert!(encoded.len() < MAX_OUTPUT_BYTES);
+        assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+        assert!(started.elapsed() < TIMEOUT);
+        eprintln!(
+            "household near-limit: order={order:?} malformed={} bytes={} envelope={} memory={} fuel={} elapsed-ms={}",
+            malformed,
+            bytes,
+            encoded.len(),
+            store.data().limits.peak_memory_bytes,
+            MAX_FUEL - store.get_fuel().unwrap(),
+            started.elapsed().as_millis()
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn calendar_escaped_text_output_budget_stays_within_committed_limits() {
+    let data: Vec<_> = (0..40)
+        .map(|i| json!({"id":format!("{i:03}{}", "\0".repeat(125)), "attributes":{"summary":"\0".repeat(256),"starts_at":"\0".repeat(256),"ends_at":"\0".repeat(256)}}))
+        .collect();
+    let body = serde_json::to_vec(&json!({"data":data})).unwrap();
+    let response_bytes = body.len();
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let encoded = provider.call_invoke(&mut store, "skylight.private.calendar.events.list", r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}"#).expect("escaped output must not trap");
+    let ComponentResponse::Succeeded { output } = serde_json::from_str(&encoded).unwrap() else {
+        panic!("budget projection failed");
+    };
+    let records = output["events"].as_array().unwrap().len();
+    assert!(records > 0 && records < 40);
+    assert_eq!(output["truncated"], true);
+    assert_eq!(output["upstreamCompleteness"], "unknown");
+    assert!(encoded.len() < MAX_OUTPUT_BYTES);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    assert!(started.elapsed() < TIMEOUT);
+    assert_eq!(store.data().requests.len(), 1);
+    eprintln!(
+        "calendar escaped-text budget: response={} envelope={} records={} memory={} fuel={} elapsed-ms={}",
+        response_bytes,
+        encoded.len(),
+        records,
+        store.data().limits.peak_memory_bytes,
+        MAX_FUEL - store.get_fuel().unwrap(),
+        started.elapsed().as_millis()
+    );
 }

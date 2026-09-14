@@ -5,9 +5,11 @@ use dekopon_capability::{
     AuthorizedInvocation, EffectKind, ExecutionConstraints, HttpConstraints, ProposedInvocation,
     broker::AuthorizationGate,
 };
-use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, RiskLevel, TraceId};
+use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, Redacted, RiskLevel, TraceId};
 use dekopon_provider_sdk::ProviderApiVersion;
 use serde_json::json;
+
+mod household_cases;
 
 const MAX_COMPONENT_BYTES: u64 = 393_216;
 const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
@@ -57,6 +59,14 @@ fn constraints(authority: &str, max_request_bytes: u64) -> ExecutionConstraints 
 }
 
 fn authorized(capability: &str, constraints: ExecutionConstraints) -> AuthorizedInvocation {
+    authorized_input(capability, json!({}), constraints)
+}
+
+fn authorized_input(
+    capability: &str,
+    input: serde_json::Value,
+    constraints: ExecutionConstraints,
+) -> AuthorizedInvocation {
     let capability = capability.parse().expect("valid capability fixture");
     let proposal = ProposedInvocation::new(
         "skylight-test-invocation"
@@ -73,7 +83,7 @@ fn authorized(capability: &str, constraints: ExecutionConstraints) -> Authorized
         "5ce1a6207e57000000000000decafbad"
             .parse::<TraceId>()
             .expect("valid trace fixture"),
-        json!({}),
+        input,
     );
     AuthorizationGate::new()
         .authorize(
@@ -114,7 +124,7 @@ async fn crates_io_broker_loads_the_exact_manifest() {
         "Unsupported private Skylight account and frame reads over broker HTTP"
     );
     assert_eq!(manifest.command_words, ["skylight"]);
-    assert_eq!(manifest.capabilities.len(), 2);
+    assert_eq!(manifest.capabilities.len(), 7);
 
     let expected = [
         (
@@ -208,4 +218,109 @@ fn committed_broker_limits_are_exact() {
     assert_eq!(limits.max_http_request_bytes, 4_096);
     assert_eq!(limits.max_http_response_bytes, 262_144);
     assert_eq!(limits.max_timeout, Duration::from_secs(10));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn household_reads_have_independent_bounded_get_authority_and_destination_bound_credentials()
+{
+    let registry = load().await;
+    let manifest = registry.manifests().next().unwrap();
+    for (declared, case) in manifest.capabilities[2..]
+        .iter()
+        .zip(household_cases::cases())
+    {
+        assert_eq!(declared.id.as_str(), case.capability);
+        assert_eq!(declared.effect, EffectKind::ReadOnly);
+        assert_eq!(declared.risk, RiskLevel::Medium);
+        assert_eq!(declared.input_schema["additionalProperties"], false);
+        assert_eq!(
+            declared.input_schema["required"].as_array().unwrap().len(),
+            case.input.as_object().unwrap().len()
+        );
+        // The shared cases also pin component paths, argv and projections in component_host.
+        assert!(
+            !case.path.is_empty()
+                && !case.key.is_empty()
+                && !case.argv.is_empty()
+                && case.body.is_object()
+        );
+        for denied_host in [
+            "not-skylight.invalid",
+            "app.ourskylight.com.evil.invalid",
+            "app.ourskylight.com:444",
+        ] {
+            let failure = registry
+                .invoke(
+                    authorized_input(
+                        case.capability,
+                        case.input.clone(),
+                        constraints(denied_host, MAX_REQUEST_BYTES),
+                    ),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                failure.error.as_ref(),
+                BrokerHostError::HostCallRejected {
+                    reason: "denied",
+                    ..
+                }
+            ));
+            assert!(failure.http_calls.is_empty());
+        }
+        for (kind, expected) in [("method", "denied"), ("bytes", "byte-limit")] {
+            let mut grant = constraints("app.ourskylight.com", MAX_REQUEST_BYTES);
+            let http = grant.http.as_mut().unwrap();
+            assert_eq!(http.max_requests, 1);
+            assert!(!http.allow_plaintext_loopback);
+            match kind {
+                "method" => http.allowed_methods = vec!["POST".to_owned()],
+                "bytes" => http.max_request_bytes = 1,
+                _ => unreachable!("fixed test cases"),
+            }
+            let failure = registry
+                .invoke(
+                    authorized_input(case.capability, case.input.clone(), grant),
+                    None,
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(failure.error.as_ref(), BrokerHostError::HostCallRejected { reason, .. } if *reason == expected),
+                "{}: {:?}",
+                kind,
+                failure.error
+            );
+            assert!(failure.http_calls.is_empty());
+        }
+        let credential = dekopon_broker_host::BoundCredential::bearer(
+            "Bearer",
+            Redacted::new("synthetic-credential-sentinel".to_owned()),
+            vec!["not-skylight.invalid".to_owned()],
+        )
+        .unwrap();
+        let failure = registry
+            .invoke(
+                authorized_input(
+                    case.capability,
+                    case.input.clone(),
+                    constraints("app.ourskylight.com", MAX_REQUEST_BYTES),
+                ),
+                Some(credential),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            failure.error.as_ref(),
+            BrokerHostError::HostCallRejected {
+                reason: "denied",
+                ..
+            }
+        ));
+        assert_eq!(failure.http_calls.len(), 1);
+        assert!(!failure.http_calls[0].credential_injected);
+        assert_eq!(failure.http_calls[0].status, None);
+        assert!(!format!("{failure:?}").contains("synthetic-credential-sentinel"));
+    }
 }
