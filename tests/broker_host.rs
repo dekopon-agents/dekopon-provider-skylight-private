@@ -19,11 +19,10 @@ const MAX_OUTPUT_BYTES: u64 = 32_768;
 const TIMEOUT_MS: u64 = 10_000;
 
 fn component_path() -> PathBuf {
-    std::env::var_os("DEKOPON_SKYLIGHT_COMPONENT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist/provider-skylight-private.wasm")
-        })
+    PathBuf::from(
+        std::env::var_os("DEKOPON_PROVIDER_COMPONENT")
+            .expect("DEKOPON_PROVIDER_COMPONENT must point at the built component"),
+    )
 }
 
 fn host_limits() -> BrokerHostLimits {
@@ -198,6 +197,7 @@ async fn undersized_request_grant_is_refused_before_dispatch_with_empty_evidence
 }
 
 #[test]
+#[serial_test::serial]
 fn committed_broker_limits_are_exact() {
     let limits = host_limits();
     assert_eq!(limits.max_memory_bytes, 32 * 1024 * 1024);

@@ -5,8 +5,10 @@
 //! the broker may inject one destination-bound credential only after validating the guest request.
 //!
 //! Route evidence and the `attributes.name` / `attributes.label` fallback were adapted from
-//! `joshuaswarren/pyskylight` commit `69e4576b9035d71aacda9ade7a4afea05a663e94` (MIT). See
-//! `../THIRD_PARTY_NOTICES.md`. This is a native Rust reimplementation; Python is not embedded.
+//! `joshuaswarren/pyskylight` commit `69e4576b9035d71aacda9ade7a4afea05a663e94` (MIT). The
+//! CycloneDX SBOM release asset discloses this and every other dependency; there is no
+//! source-distribution notices file in this repository. This is a native Rust reimplementation;
+//! Python is not embedded.
 //!
 //! The `skylight` command word proposes the same two capabilities from argv; see `commands`.
 
@@ -51,17 +53,13 @@ const MAX_PROJECTED_OUTPUT_BYTES: usize =
     MAX_COMPONENT_OUTPUT_BYTES - COMPONENT_OUTPUT_ENVELOPE_RESERVE;
 const NAME_TRUNCATION_MARKER: &str = "…";
 
-// Keep the source-distribution notices, locked shipped-Wasm inventory, and repository license
-// bundle in named core-Wasm custom sections. `wasm-tools component new` preserves these bytes in
-// the composed component; build verification compares every source file byte-for-byte against both
-// artifacts. These statics are data only and do not add an import or runtime authority.
-#[used]
-#[cfg_attr(
-    target_arch = "wasm32",
-    unsafe(link_section = ".custom_section.dekopon_third_party_notices")
-)]
-static EMBEDDED_THIRD_PARTY_NOTICES: [u8; include_bytes!("../THIRD_PARTY_NOTICES.md").len()] =
-    *include_bytes!("../THIRD_PARTY_NOTICES.md");
+// Keep the repository license bundle in named core-Wasm custom sections. `wasm-tools component
+// new` preserves these bytes in the composed component. These statics are data only and do not
+// add an import or runtime authority.
+//
+// The source-distribution notices and locked shipped-Wasm inventory custom sections that used to
+// sit alongside these were dropped with `THIRD_PARTY_NOTICES.md` and `security/`; the CycloneDX
+// SBOM the shared release workflow generates is the disclosure now.
 #[used]
 #[cfg_attr(
     target_arch = "wasm32",
@@ -76,13 +74,6 @@ static EMBEDDED_LICENSE_MIT: [u8; include_bytes!("../LICENSE-MIT").len()] =
 )]
 static EMBEDDED_LICENSE_APACHE: [u8; include_bytes!("../LICENSE-APACHE").len()] =
     *include_bytes!("../LICENSE-APACHE");
-#[used]
-#[cfg_attr(
-    target_arch = "wasm32",
-    unsafe(link_section = ".custom_section.dekopon_wasm_dependencies")
-)]
-static EMBEDDED_WASM_DEPENDENCIES: [u8; include_bytes!("../security/wasm-dependencies.txt").len()] =
-    *include_bytes!("../security/wasm-dependencies.txt");
 
 mod bindings {
     wit_bindgen::generate!({
