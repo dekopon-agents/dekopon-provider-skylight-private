@@ -12,28 +12,6 @@ pub struct Case {
 pub fn cases() -> Vec<Case> {
     vec![
         Case {
-            capability: "skylight.private.tasks.list",
-            input: json!({"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11","includeLate":true,"includeUpForGrabs":false,"filter":"linked_to_profile"}),
-            path: "/chores?after=2028-03-11&before=2028-03-11&include_late=true&include_up_for_grabs=false&filter=linked_to_profile",
-            key: "tasks",
-            body: json!({"data":[{"id":"sample","type":"chore","attributes":{"summary":"Synthetic task","status":"complete","completed_at":"opaque source time","start":"2028-03-11","recurrence_set":["RRULE:FREQ=DAILY"],"recurring":true},"relationships":{"category":{"data":{"type":"category","id":"category-test"}},"completed_category":{"data":null}}}],"included":[{"type":"category","id":"category-test","attributes":{"label":"Synthetic profile","linked_to_profile":true},"relationships":{"family_member":{"data":{"id":"member-test","type":"family_member"}}}}]}),
-            argv: vec![
-                "tasks",
-                "--frame",
-                "frame-test",
-                "--after",
-                "2028-03-11",
-                "--before",
-                "2028-03-11",
-                "--include-late",
-                "true",
-                "--include-up-for-grabs",
-                "false",
-                "--filter",
-                "linked_to_profile",
-            ],
-        },
-        Case {
             capability: "skylight.private.categories.list",
             input: json!({"frameId":"frame-test"}),
             path: "/categories",
@@ -84,6 +62,28 @@ pub fn cases() -> Vec<Case> {
             key: "items",
             body: json!({"data":[{"id":"sample","attributes":{"label":"Sample item","status":"unknown-status","section":null}}]}),
             argv: vec!["list-items", "--frame", "frame-test", "--list", "list-test"],
+        },
+        Case {
+            capability: "skylight.private.tasks.list",
+            input: json!({"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11","includeLate":true,"includeUpForGrabs":false,"filter":"linked_to_profile"}),
+            path: "/chores?after=2028-03-11&before=2028-03-11&include_late=true&include_up_for_grabs=false&filter=linked_to_profile",
+            key: "tasks",
+            body: json!({"data":[{"id":"sample","type":"chore","attributes":{"summary":"Synthetic task","status":"complete","completed_at":"opaque source time","start":"2028-03-11","recurrence_set":["RRULE:FREQ=DAILY"],"recurring":true},"relationships":{"category":{"data":{"type":"category","id":"category-test"}},"completed_category":{"data":null}}}],"included":[{"type":"category","id":"category-test","attributes":{"label":"Synthetic profile","linked_to_profile":true},"relationships":{"family_member":{"data":{"id":"member-test","type":"family_member"}}}}]}),
+            argv: vec![
+                "tasks",
+                "--frame",
+                "frame-test",
+                "--after",
+                "2028-03-11",
+                "--before",
+                "2028-03-11",
+                "--include-late",
+                "true",
+                "--include-up-for-grabs",
+                "false",
+                "--filter",
+                "linked_to_profile",
+            ],
         },
     ]
 }

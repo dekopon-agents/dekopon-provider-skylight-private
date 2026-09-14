@@ -415,6 +415,18 @@ fn household_count_text_byte_response_limits_and_sanitized_statuses() {
 fn tasks_and_event_optional_parameters_match_schema_cli_and_raw_json() {
     let event_include = "categories,calendar_account,event_notification_setting";
     let mut events = input(Read::Events);
+    assert!(!Read::Events.uri(&events).unwrap().contains("include="));
+    let mut tasks = input(Read::Tasks);
+    tasks["includeLate"] = json!(false);
+    tasks["includeUpForGrabs"] = json!(false);
+    tasks["filter"] = json!("linked_to_profile");
+    let default_uri = Read::Tasks.uri(&input(Read::Tasks)).unwrap();
+    assert_eq!(Read::Tasks.uri(&tasks).unwrap(), default_uri);
+    for optional in ["includeLate", "includeUpForGrabs", "filter"] {
+        let mut omitted = tasks.clone();
+        omitted.as_object_mut().unwrap().remove(optional);
+        assert_eq!(Read::Tasks.uri(&omitted).unwrap(), default_uri);
+    }
     events["include"] = json!(event_include);
     assert!(
         Read::Events

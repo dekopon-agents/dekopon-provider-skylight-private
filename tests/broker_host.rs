@@ -225,17 +225,51 @@ async fn household_reads_have_independent_bounded_get_authority_and_destination_
 {
     let registry = load().await;
     let manifest = registry.manifests().next().unwrap();
-    for (declared, case) in manifest.capabilities[2..]
-        .iter()
-        .zip(household_cases::cases())
-    {
+    let cases = household_cases::cases();
+    assert_eq!(manifest.capabilities.len() - 2, cases.len());
+    // Shared cases preserve the manifest's append-only household capability order.
+    for (declared, case) in manifest.capabilities[2..].iter().zip(cases) {
         assert_eq!(declared.id.as_str(), case.capability);
         assert_eq!(declared.effect, EffectKind::ReadOnly);
         assert_eq!(declared.risk, RiskLevel::Medium);
         assert_eq!(declared.input_schema["additionalProperties"], false);
+        // A fully populated fixture includes optional keys; its size is not the required count.
+        let (required, optional): (&[&str], &[&str]) = match case.capability {
+            "skylight.private.categories.list" | "skylight.private.lists.list" => {
+                (&["frameId"], &[])
+            }
+            "skylight.private.lists.read" | "skylight.private.list.items.list" => {
+                (&["frameId", "listId"], &[])
+            }
+            "skylight.private.calendar.events.list" => {
+                (&["frameId", "dateMin", "dateMax", "timezone"], &["include"])
+            }
+            "skylight.private.tasks.list" => (
+                &["frameId", "after", "before"],
+                &["includeLate", "includeUpForGrabs", "filter"],
+            ),
+            _ => panic!("unrecognized household capability"),
+        };
+        assert_eq!(declared.input_schema["required"], json!(required));
+        let allowed: std::collections::BTreeSet<_> =
+            required.iter().chain(optional).copied().collect();
         assert_eq!(
-            declared.input_schema["required"].as_array().unwrap().len(),
-            case.input.as_object().unwrap().len()
+            declared.input_schema["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            allowed
+        );
+        assert_eq!(
+            case.input
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            allowed
         );
         // The shared cases also pin component paths, argv and projections in component_host.
         assert!(
