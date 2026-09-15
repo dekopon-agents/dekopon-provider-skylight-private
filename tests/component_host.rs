@@ -11,7 +11,9 @@ use wasmtime::{
     component::{Component, HasSelf, Linker},
 };
 
-const MAX_COMPONENT_BYTES: u64 = 393_216;
+mod household_cases;
+
+const MAX_COMPONENT_BYTES: u64 = 589_824;
 const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FUEL: u64 = 128_000_000;
 const MAX_INPUT_BYTES: usize = 4_096;
@@ -20,6 +22,9 @@ const MAX_RESPONSE_BYTES: usize = 262_144;
 const MAX_OUTPUT_BYTES: usize = 32_768;
 const TIMEOUT: Duration = Duration::from_secs(10);
 const NEAR_LIMIT_FRAME_COUNT: usize = 20_000;
+
+// Every test shares the serial lock: concurrent Wasmtime compilation from even an untimed test
+// otherwise consumes CPU inside another test's unchanged wall-clock budget on small CI runners.
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -124,16 +129,26 @@ fn worst_case_frame_body() -> Vec<u8> {
     serde_json::to_vec(&json!({"data": data})).expect("frame response serializes")
 }
 
-/// Produces the 260,010-byte review probe without a fixture or random dependency. Multiplication by
-/// 7,919 permutes all 20,000 indices, and each selected scalar is exactly three UTF-8 bytes.
-fn near_limit_frame_body(malformed_last: bool) -> Vec<u8> {
+#[derive(Clone, Copy, Debug)]
+enum RecordOrder {
+    Permuted,
+    Descending,
+}
+
+/// Produces a 260,010-byte review probe without a fixture or random dependency. Multiplication by
+/// 7,919 permutes all 20,000 indices; descending order replaces every retained record. Each selected
+/// scalar is exactly three UTF-8 bytes.
+fn near_limit_frame_body(malformed_last: bool, order: RecordOrder) -> Vec<u8> {
     let mut body = Vec::with_capacity(MAX_RESPONSE_BYTES);
     body.extend_from_slice(br#"{"data":["#);
     for position in 0..NEAR_LIMIT_FRAME_COUNT {
         if position != 0 {
             body.push(b',');
         }
-        let index = (position * 7_919 + 1_237) % NEAR_LIMIT_FRAME_COUNT;
+        let index = match order {
+            RecordOrder::Permuted => (position * 7_919 + 1_237) % NEAR_LIMIT_FRAME_COUNT,
+            RecordOrder::Descending => NEAR_LIMIT_FRAME_COUNT - 1 - position,
+        };
         let id = char::from_u32(0x0800 + index as u32).expect("fixture scalar is valid");
         if malformed_last && position + 1 == NEAR_LIMIT_FRAME_COUNT {
             write!(
@@ -231,6 +246,7 @@ fn assert_request(request: &Request, uri: &str) {
 /// Wasmtime linker rather than a named import-free host crate so it keeps holding as the Dekopon
 /// tree rearranges its hosts.
 #[test]
+#[serial_test::serial]
 fn immediate_host_refuses_the_sole_privileged_import() {
     let path = component_path();
     let bytes = std::fs::metadata(&path)
@@ -373,6 +389,7 @@ fn in_memory_sole_wit_host_preserves_requests_and_worst_case_projection() {
 }
 
 #[test]
+#[serial_test::serial]
 fn component_boundary_pins_unknown_precedence_and_malformed_json() {
     let (mut store, provider) = instantiate(response(account_body()));
     let cases = [
@@ -426,7 +443,7 @@ fn component_boundary_pins_unknown_precedence_and_malformed_json() {
 #[test]
 #[serial_test::serial]
 fn near_limit_random_order_projects_within_committed_fuel() {
-    let body = near_limit_frame_body(false);
+    let body = near_limit_frame_body(false, RecordOrder::Permuted);
     let response_bytes = body.len();
     let started = Instant::now();
     let (mut store, provider) = instantiate(response(body));
@@ -473,7 +490,7 @@ fn near_limit_random_order_projects_within_committed_fuel() {
 #[test]
 #[serial_test::serial]
 fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
-    let body = near_limit_frame_body(true);
+    let body = near_limit_frame_body(true, RecordOrder::Permuted);
     let response_bytes = body.len();
     let started = Instant::now();
     let (mut store, provider) = instantiate(response(body));
@@ -511,6 +528,7 @@ fn near_limit_malformed_last_record_fails_closed_within_committed_fuel() {
 /// `run-command` answers from the guest alone: a proposal, the help page, or the usage error, and
 /// never a call through the HTTP import, whatever argv or piped value arrives.
 #[test]
+#[serial_test::serial]
 fn run_command_proposes_or_renders_without_touching_the_http_import() {
     let (mut store, provider) = instantiate(response(account_body()));
     let mut run = |words: &[&str]| -> CommandRunOutcome {
@@ -577,7 +595,7 @@ fn run_command_proposes_or_renders_without_touching_the_http_import() {
 #[test]
 #[serial_test::serial]
 fn committed_component_limits_are_exact() {
-    assert_eq!(MAX_COMPONENT_BYTES, 393_216);
+    assert_eq!(MAX_COMPONENT_BYTES, 589_824);
     assert_eq!(MAX_MEMORY_BYTES, 32 * 1024 * 1024);
     assert_eq!(MAX_FUEL, 128_000_000);
     assert_eq!(MAX_INPUT_BYTES, 4_096);
@@ -585,4 +603,326 @@ fn committed_component_limits_are_exact() {
     assert_eq!(MAX_RESPONSE_BYTES, 262_144);
     assert_eq!(MAX_OUTPUT_BYTES, 32_768);
     assert_eq!(TIMEOUT, Duration::from_secs(10));
+}
+
+#[test]
+#[serial_test::serial]
+fn household_capabilities_cross_component_boundary_without_ambient_authority() {
+    for case in household_cases::cases() {
+        let (mut store, provider) = instantiate(response(serde_json::to_vec(&case.body).unwrap()));
+        let argv: Vec<_> = case.argv.iter().map(|s| (*s).to_owned()).collect();
+        let proposed = provider
+            .call_run_command(&mut store, &argv, Some("secret-sentinel"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<CommandRunOutcome>(&proposed).unwrap(),
+            CommandRunOutcome::Proposed {
+                capability: case.capability.parse().unwrap(),
+                input: case.input.clone(),
+                secret_use: None
+            }
+        );
+        assert!(store.data().requests.is_empty());
+        let encoded = provider
+            .call_invoke(&mut store, case.capability, &case.input.to_string())
+            .unwrap();
+        let ComponentResponse::Succeeded { output } = serde_json::from_str(&encoded).unwrap()
+        else {
+            panic!("household read failed");
+        };
+        assert_eq!(output["upstreamCompleteness"], "unknown");
+        assert_eq!(output["coverage"], "bounded-response");
+        let record = if case.key == "list" {
+            &output[case.key]
+        } else {
+            &output[case.key][0]
+        };
+        assert_eq!(record["id"], "sample");
+        if case.key == "events" {
+            assert_eq!(record["startsAt"], "2028-03-10T23:00:00-05:00");
+            assert_eq!(record["endsAt"], "2028-03-14T01:00:00-04:00");
+            assert_eq!(record["allDay"], false);
+        }
+        if case.key == "tasks" {
+            assert_eq!(record["status"], "complete");
+            assert_eq!(record["completedAt"], "opaque source time");
+            assert_eq!(
+                record["relationships"]["category"]["data"]["included"],
+                true
+            );
+            assert_eq!(
+                output["included"][0]["relationships"]["family_member"]["data"]["included"],
+                false
+            );
+        }
+        if case.key == "items" {
+            assert!(record["status"].is_null());
+        }
+        assert!(encoded.len() < MAX_OUTPUT_BYTES);
+        assert_eq!(store.data().requests.len(), 1);
+        assert_request(
+            &store.data().requests[0],
+            &format!(
+                "https://app.ourskylight.com/api/frames/frame-test{}",
+                case.path
+            ),
+        );
+        assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+        assert!(store.get_fuel().unwrap() > 0);
+        for input in [
+            r#"{"frameId":"x","frameId":"y"}"#,
+            r#"{"frameId":null,"frameId":"y"}"#,
+            r#"{"frameId":"x","url":"secret-sentinel"}"#,
+            "{broken",
+        ] {
+            let encoded = provider
+                .call_invoke(&mut store, case.capability, input)
+                .unwrap();
+            assert!(
+                matches!(serde_json::from_str::<ComponentResponse>(&encoded).unwrap(), ComponentResponse::Failed {error} if error.code == "invalid-input" && error.message == "input must match the bounded Skylight read schema")
+            );
+        }
+        assert_eq!(store.data().requests.len(), 1);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn household_near_response_limit_validates_tail_within_unchanged_resource_limits() {
+    assert_household_near_response_limit(RecordOrder::Permuted);
+}
+
+#[test]
+#[serial_test::serial]
+fn household_descending_near_response_limit_validates_tail_within_unchanged_resource_limits() {
+    assert_household_near_response_limit(RecordOrder::Descending);
+}
+
+fn assert_household_near_response_limit(order: RecordOrder) {
+    for malformed in [false, true] {
+        // 20,000 minimal records under 256 KiB exercise streaming retention, not a household fixture.
+        let mut body = near_limit_frame_body(false, order);
+        if malformed {
+            body.truncate(body.len() - 2);
+            body.extend_from_slice(
+                br#",{"id":"tail","attributes":{"all_day":null,"all_day":true}}]}"#,
+            );
+        }
+        let bytes = body.len();
+        let started = Instant::now();
+        let (mut store, provider) = instantiate(response(body));
+        let encoded = provider.call_invoke(&mut store,"skylight.private.calendar.events.list",r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}"#).expect("bounded response must not trap");
+        match serde_json::from_str::<ComponentResponse>(&encoded).unwrap() {
+            ComponentResponse::Succeeded { output } if !malformed => {
+                let events = output["events"].as_array().unwrap();
+                assert_eq!(events.len(), 64);
+                for (index, event) in events.iter().enumerate() {
+                    assert_eq!(
+                        event["id"],
+                        char::from_u32(0x0800 + index as u32).unwrap().to_string()
+                    );
+                    for field in ["summary", "startsAt", "endsAt", "allDay"] {
+                        assert!(event[field].is_null());
+                    }
+                    assert_eq!(event["textTruncated"], false);
+                }
+                assert_eq!(output["coverage"], "bounded-response");
+                assert_eq!(output["truncated"], true);
+                assert_eq!(output["upstreamCompleteness"], "unknown");
+            }
+            ComponentResponse::Failed { error } if malformed => {
+                assert_eq!(error.code, "invalid-response");
+                assert_eq!(
+                    error.message,
+                    "the private API returned an invalid response"
+                );
+            }
+            _ => panic!("unexpected projection result"),
+        }
+        assert!(encoded.len() < MAX_OUTPUT_BYTES);
+        assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+        assert!(started.elapsed() < TIMEOUT);
+        eprintln!(
+            "household near-limit: order={order:?} malformed={} bytes={} envelope={} memory={} fuel={} elapsed-ms={}",
+            malformed,
+            bytes,
+            encoded.len(),
+            store.data().limits.peak_memory_bytes,
+            MAX_FUEL - store.get_fuel().unwrap(),
+            started.elapsed().as_millis()
+        );
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn calendar_escaped_text_output_budget_stays_within_committed_limits() {
+    let data: Vec<_> = (0..40)
+        .map(|i| json!({"id":format!("{i:03}{}", "\0".repeat(125)), "attributes":{"summary":"\0".repeat(256),"starts_at":"\0".repeat(256),"ends_at":"\0".repeat(256)}}))
+        .collect();
+    let body = serde_json::to_vec(&json!({"data":data})).unwrap();
+    let response_bytes = body.len();
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let encoded = provider.call_invoke(&mut store, "skylight.private.calendar.events.list", r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}"#).expect("escaped output must not trap");
+    let ComponentResponse::Succeeded { output } = serde_json::from_str(&encoded).unwrap() else {
+        panic!("budget projection failed");
+    };
+    let records = output["events"].as_array().unwrap().len();
+    assert!(records > 0 && records < 40);
+    assert_eq!(output["truncated"], true);
+    assert_eq!(output["upstreamCompleteness"], "unknown");
+    assert!(encoded.len() < MAX_OUTPUT_BYTES);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    assert!(started.elapsed() < TIMEOUT);
+    assert_eq!(store.data().requests.len(), 1);
+    eprintln!(
+        "calendar escaped-text budget: response={} envelope={} records={} memory={} fuel={} elapsed-ms={}",
+        response_bytes,
+        encoded.len(),
+        records,
+        store.data().limits.peak_memory_bytes,
+        MAX_FUEL - store.get_fuel().unwrap(),
+        started.elapsed().as_millis()
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn tasks_descending_near_limit_and_malformed_recurrence_tail_preserve_runtime_limits() {
+    for malformed in [false, true] {
+        let mut body = near_limit_frame_body(false, RecordOrder::Descending);
+        if malformed {
+            body.truncate(body.len() - 2);
+            body.extend_from_slice(
+                br#",{"id":"tail","attributes":{"recurrence_set":["RRULE:FREQ=DAILY",false]}}]}"#,
+            );
+        }
+        assert_household_increment_limits(body, "tasks", malformed);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn included_and_linkage_descending_tails_preserve_runtime_limits() {
+    for malformed in [false, true] {
+        let mut included: Vec<_> = (0..6_000)
+            .rev()
+            .map(|i| json!({"id":format!("{i:04}"),"type":"category"}))
+            .collect();
+        if malformed {
+            included.push(json!({"id":"tail","type":"category","attributes":{"label":false}}));
+        }
+        assert_household_increment_limits(
+            serde_json::to_vec(&json!({"data":[],"included":included})).unwrap(),
+            "tasks",
+            malformed,
+        );
+        let mut links: Vec<_> = (0..6_000)
+            .rev()
+            .map(|i| json!({"id":format!("{i:04}"),"type":"category"}))
+            .collect();
+        if malformed {
+            links.push(json!({"id":"tail","type":false}));
+        }
+        assert_household_increment_limits(serde_json::to_vec(&json!({"data":[{"id":"event-test","relationships":{"categories":{"data":links}}}]})).unwrap(), "events", malformed);
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn rich_tasks_included_and_escaped_output_remain_bounded() {
+    let data: Vec<_> = (0..36).rev().map(|i| json!({
+        "id":format!("{i:03}"), "type":"chore", "attributes":{
+            "summary":"\0".repeat(200),"description":"\0".repeat(200),"status":"unknown-status",
+            "start":"2028-03-11","recurring":true,"recurrence_set":vec!["R".repeat(200);8]
+        },"relationships":{"category":{"data":{"id":format!("{i:03}"),"type":"category"}}}
+    })).collect();
+    let included: Vec<_> = (0..64).rev().map(|i| json!({"id":format!("{i:03}"),"type":"category","attributes":{"label":"\0".repeat(100)},"relationships":{"family_member":{"data":{"id":format!("member-{i:03}"),"type":"family_member"}}}})).collect();
+    assert_household_increment_limits(
+        serde_json::to_vec(&json!({"data":data,"included":included})).unwrap(),
+        "tasks",
+        false,
+    );
+}
+
+fn assert_household_increment_limits(body: Vec<u8>, key: &str, malformed: bool) {
+    let response_bytes = body.len();
+    assert!(
+        response_bytes > 190_000 && response_bytes <= MAX_RESPONSE_BYTES,
+        "stress response size {response_bytes}"
+    );
+    let started = Instant::now();
+    let (mut store, provider) = instantiate(response(body));
+    let (capability, input) = if key == "tasks" {
+        (
+            "skylight.private.tasks.list",
+            r#"{"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11","includeLate":true,"includeUpForGrabs":true}"#,
+        )
+    } else {
+        (
+            "skylight.private.calendar.events.list",
+            r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York","include":"categories,calendar_account,event_notification_setting"}"#,
+        )
+    };
+    let encoded = provider
+        .call_invoke(&mut store, capability, input)
+        .expect("bounded household increment must not trap");
+    match serde_json::from_str::<ComponentResponse>(&encoded).unwrap() {
+        ComponentResponse::Succeeded { output } if !malformed => {
+            assert_eq!(output["truncated"], true);
+            assert_eq!(output["upstreamCompleteness"], "unknown");
+            let records = output[key].as_array().unwrap();
+            assert!(records.len() <= 64);
+            assert!(output["included"].as_array().unwrap().len() <= 64);
+            for window in records.windows(2) {
+                assert!(window[0]["id"].as_str().unwrap() < window[1]["id"].as_str().unwrap());
+            }
+            for record in records
+                .iter()
+                .chain(output["included"].as_array().unwrap().iter())
+            {
+                if let Some(relationships) = record
+                    .get("relationships")
+                    .and_then(serde_json::Value::as_object)
+                {
+                    for r in relationships.values() {
+                        let check = |link: &serde_json::Value| {
+                            if link["included"] == true {
+                                assert!(output["included"].as_array().unwrap().iter().any(|r| r["id"] == link["id"] && r["type"] == link["type"]));
+                            }
+                        };
+                        if let Some(links) = r["data"].as_array() {
+                            assert!(links.len() <= 16);
+                            for link in links {
+                                check(link);
+                            }
+                        } else if r["data"].is_object() {
+                            check(&r["data"]);
+                        }
+                    }
+                }
+            }
+        }
+        ComponentResponse::Failed { error } if malformed => {
+            assert_eq!(error.code, "invalid-response");
+            assert_eq!(
+                error.message,
+                "the private API returned an invalid response"
+            );
+        }
+        _ => panic!("unexpected increment projection"),
+    }
+    assert!(encoded.len() < MAX_OUTPUT_BYTES);
+    assert_eq!(store.data().requests.len(), 1);
+    assert!(store.data().limits.peak_memory_bytes < MAX_MEMORY_BYTES);
+    assert!(store.get_fuel().unwrap() > 0);
+    assert!(started.elapsed() < TIMEOUT);
+    eprintln!(
+        "household increment: key={key} malformed={malformed} response={response_bytes} envelope={} memory={} fuel={} elapsed-ms={}",
+        encoded.len(),
+        store.data().limits.peak_memory_bytes,
+        MAX_FUEL - store.get_fuel().unwrap(),
+        started.elapsed().as_millis()
+    );
 }

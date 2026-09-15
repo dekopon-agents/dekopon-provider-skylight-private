@@ -1,6 +1,6 @@
-//! An explicitly unsupported proof of concept for two reads from Skylight's private app API.
+//! An explicitly unsupported proof of concept for bounded reads from Skylight's private app API.
 //!
-//! This broker-only guest fixes both request paths, accepts no selectors or transport fields, and
+//! This broker-only guest fixes request routes, accepts only capability-specific selectors, and
 //! projects untrusted JSON:API responses into small typed outputs. It never sets `authorization`:
 //! the broker may inject one destination-bound credential only after validating the guest request.
 //!
@@ -10,7 +10,7 @@
 //! source-distribution notices file in this repository. This is a native Rust reimplementation;
 //! Python is not embedded.
 //!
-//! The `skylight` command word proposes the same two capabilities from argv; see `commands`.
+//! The `skylight` command word proposes the same capabilities from argv; see `commands`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::{fmt, marker::PhantomData};
@@ -27,6 +27,9 @@ use serde::{
 use serde_json::{Value, json};
 
 mod commands;
+mod household;
+#[cfg(test)]
+mod household_tests;
 
 const ACCOUNT_CAPABILITY: &str = "skylight.private.account.read";
 const FRAMES_CAPABILITY: &str = "skylight.private.frames.list";
@@ -117,7 +120,10 @@ impl Provider for SkylightPrivate {
                     FRAMES_CAPABILITY,
                     "Lists bounded identifiers and optional names for visible frames",
                 ),
-            ],
+            ]
+            .into_iter()
+            .chain(household::READS.map(household::Read::manifest))
+            .collect(),
         }
     }
 
@@ -143,7 +149,10 @@ where
     match capability.as_str() {
         ACCOUNT_CAPABILITY => read_account(input, send),
         FRAMES_CAPABILITY => list_frames(input, send),
-        _ => Err(unknown_capability()),
+        _ => match household::Read::from_capability(capability.as_str()) {
+            Some(read) => read.invoke(input, send),
+            None => Err(unknown_capability()),
+        },
     }
 }
 
@@ -178,7 +187,7 @@ fn validate_empty_input(input: Value) -> Result<(), ProviderError> {
 }
 
 /// Performs exactly one broker call with a fixed GET request and maps all host detail away.
-fn send_once<F>(uri: &'static str, send: F) -> Result<Vec<u8>, ProviderError>
+fn send_once<F>(uri: &str, send: F) -> Result<Vec<u8>, ProviderError>
 where
     F: FnOnce(Request) -> Result<Response, HttpError>,
 {
@@ -507,20 +516,23 @@ fn failed_component_response(error: ProviderError) -> ComponentResponse {
 }
 
 fn invoke_component(capability: &str, input_json: &str) -> ComponentResponse {
-    // Match the two immutable wire capabilities before looking at input. This deliberately treats
-    // malformed capability syntax as unknown and preserves unknown-capability precedence over JSON
-    // parsing and exact-empty-object validation.
-    if !matches!(capability, ACCOUNT_CAPABILITY | FRAMES_CAPABILITY) {
+    // Unknown capability always wins, even over malformed JSON.
+    let read = household::Read::from_capability(capability);
+    if !matches!(capability, ACCOUNT_CAPABILITY | FRAMES_CAPABILITY) && read.is_none() {
         return failed_component_response(unknown_capability());
     }
-
-    let input = match serde_json::from_str::<Value>(input_json) {
+    let input = if read.is_some() {
+        household::parse_input(input_json)
+    } else {
+        serde_json::from_str::<Value>(input_json).map_err(|_| invalid_input())
+    };
+    let input = match input {
         Ok(input) => input,
-        Err(_) => return failed_component_response(invalid_input()),
+        Err(error) => return failed_component_response(error),
     };
     let capability = capability
         .parse::<CapabilityId>()
-        .expect("the two matched static capability IDs are valid");
+        .expect("the matched static capability IDs are valid");
     match SkylightPrivate::invoke(&capability, input) {
         Ok(output) => ComponentResponse::Succeeded { output },
         Err(error) => failed_component_response(error),
@@ -587,7 +599,7 @@ mod tests {
         }
     }
 
-    fn assert_fixed_request(request: &Request, expected_uri: &str) {
+    pub(super) fn assert_fixed_request(request: &Request, expected_uri: &str) {
         assert_eq!(request.method, "GET");
         assert_eq!(request.uri, expected_uri);
         assert!(request.body.is_empty());
@@ -631,18 +643,21 @@ mod tests {
     }
 
     #[test]
-    fn manifest_is_exactly_the_two_medium_read_capabilities() {
+    fn manifest_preserves_legacy_and_adds_only_approved_medium_reads() {
         let manifest = SkylightPrivate::manifest();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 2);
+        assert_eq!(manifest.capabilities.len(), 8);
         assert_eq!(
             manifest
                 .capabilities
                 .iter()
                 .map(|capability| capability.id.as_str())
                 .collect::<Vec<_>>(),
-            vec![ACCOUNT_CAPABILITY, FRAMES_CAPABILITY]
+            [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY]
+                .into_iter()
+                .chain(super::household::READS.map(super::household::Read::capability))
+                .collect::<Vec<_>>()
         );
         let empty_schema = json!({
             "type": "object",
@@ -652,7 +667,9 @@ mod tests {
         for capability in &manifest.capabilities {
             assert_eq!(capability.effect, EffectKind::ReadOnly);
             assert_eq!(capability.risk, RiskLevel::Medium);
-            assert_eq!(capability.input_schema, empty_schema);
+            if [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY].contains(&capability.id.as_str()) {
+                assert_eq!(capability.input_schema, empty_schema);
+            }
             assert!(!capability.id.as_str().contains("write"));
             assert!(!capability.id.as_str().contains("request"));
             assert!(!capability.id.as_str().contains("api"));
@@ -1084,8 +1101,9 @@ mod tests {
 
     #[test]
     fn complete_manifest_text_and_api_are_stable() {
-        let encoded = serde_json::to_string(&SkylightPrivate::manifest())
-            .expect("the fixed manifest serializes");
+        let mut manifest = SkylightPrivate::manifest();
+        manifest.capabilities.truncate(2);
+        let encoded = serde_json::to_string(&manifest).expect("the fixed manifest serializes");
         assert_eq!(
             encoded,
             concat!(
