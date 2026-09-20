@@ -1,6 +1,8 @@
 use std::{path::PathBuf, time::Duration};
 
-use dekopon_broker_host::{BrokerHostError, BrokerHostLimits, BrokerProviderRegistry};
+use dekopon_broker_host::{
+    BrokerHostError, BrokerHostLimits, BrokerProviderRegistry, asset::AssetInputs,
+};
 use dekopon_capability::{
     AuthorizedInvocation, EffectKind, ExecutionConstraints, HttpConstraints, ProposedInvocation,
     broker::AuthorizationGate,
@@ -55,6 +57,7 @@ fn constraints(authority: &str, max_request_bytes: u64) -> ExecutionConstraints 
         }),
         storage: None,
         secret_use: None,
+        asset: None,
     }
 }
 
@@ -160,6 +163,7 @@ async fn nonmatching_authority_is_refused_before_dispatch_with_empty_evidence() 
                 constraints("not-skylight.invalid", MAX_REQUEST_BYTES),
             ),
             None,
+            AssetInputs::default(),
         )
         .await
         .expect_err("a grant for another authority must be denied");
@@ -186,6 +190,7 @@ async fn undersized_request_grant_is_refused_before_dispatch_with_empty_evidence
                 constraints("app.ourskylight.com", 1),
             ),
             None,
+            AssetInputs::default(),
         )
         .await
         .expect_err("a one-byte request grant must reject the fixed request");
@@ -291,6 +296,7 @@ async fn household_reads_have_independent_bounded_get_authority_and_destination_
                         constraints(denied_host, MAX_REQUEST_BYTES),
                     ),
                     None,
+                    AssetInputs::default(),
                 )
                 .await
                 .unwrap_err();
@@ -317,6 +323,7 @@ async fn household_reads_have_independent_bounded_get_authority_and_destination_
                 .invoke(
                     authorized_input(case.capability, case.input.clone(), grant),
                     None,
+                    AssetInputs::default(),
                 )
                 .await
                 .unwrap_err();
@@ -342,6 +349,7 @@ async fn household_reads_have_independent_bounded_get_authority_and_destination_
                     constraints("app.ourskylight.com", MAX_REQUEST_BYTES),
                 ),
                 Some(credential),
+                AssetInputs::default(),
             )
             .await
             .unwrap_err();
