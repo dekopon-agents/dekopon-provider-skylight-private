@@ -432,10 +432,10 @@ list index and populated detail included items were browser-observed. Every test
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. All Dekopon dependencies are exact crates.io 0.15.0 pins; there are no Git, path,
+1.259.0. All Dekopon dependencies are exact crates.io 0.18.0 pins; there are no Git, path,
 symlink, submodule, or adjacent-checkout dependencies. The repository owns only its composed WIT
-world. Its two dependency WIT mirrors are checked byte-for-byte against the resolved crates.io
-0.15.0 package contents, not trusted by a local hash.
+world. Its three dependency WIT mirrors (provider, HTTP, and asset) are checked byte-for-byte
+against the resolved crates.io 0.18.0 package contents, not trusted by a local hash.
 
 ```console
 cargo fmt --all --check
@@ -469,15 +469,16 @@ distribution, and neither adds the provider to a default catalog, image, policy,
 package, or deployment.
 
 All behavior tests use synthetic in-memory responses. The component-host test implements the sole
-WIT import in memory and opens no socket. The real broker host is used only for pre-network
-authority, method, request-budget and credential-destination refusal; successful native broker HTTP cannot be safely mocked without
+buffered HTTP WIT import in memory and opens no socket; unexpected streaming or asset calls fail
+the test. The real broker host is used only for pre-network authority, method, request-budget and credential-destination refusal; successful native broker HTTP cannot be safely mocked without
 changing the fixed production URI. No test contacts Skylight, a public host, DNS, or loopback, and
 no captured response fixture is permitted.
 
 The finished component must export only `describe`, `invoke`, and `run-command`, import exactly
-`dekopon:http/client@1.0.0`, and import no WASI, filesystem, environment, clock, random, socket,
+`dekopon:http/client@1.1.0`, and import no WASI, filesystem, environment, clock, random, socket,
 JavaScript, or other ambient interface. The immediate host refuses it because that host provides no
-HTTP import. There is no tracked `security/` directory in this repository; the committed fuel,
+HTTP import. HTTP 1.1.0's asset types require the asset WIT mirror at build time; unused stream
+and asset imports are eliminated from this buffered-only component. There is no tracked `security/` directory in this repository; the committed fuel,
 memory, and timeout ceilings and measured headroom now live only as the `MAX_*`/`TIMEOUT*`
 constants and the `committed_component_limits_are_exact` / `committed_broker_limits_are_exact`
 tests in `tests/component_host.rs` and `tests/broker_host.rs`.

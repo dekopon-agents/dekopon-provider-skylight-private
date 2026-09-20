@@ -8,7 +8,7 @@ use dekopon_provider_sdk::{CommandRunOutcome, ComponentFailure, ComponentRespons
 use serde_json::json;
 use wasmtime::{
     Config, Engine, ResourceLimiter, Store,
-    component::{Component, HasSelf, Linker},
+    component::{Component, HasSelf, Linker, Resource},
 };
 
 mod household_cases;
@@ -33,7 +33,10 @@ mod bindings {
     });
 }
 
-use bindings::dekopon::http::client::{Header, HttpError, Request, Response};
+use bindings::dekopon::asset::asset;
+use bindings::dekopon::http::client::{
+    Header, HttpError, Request, Response, StreamedRequest, StreamedResponse,
+};
 
 fn component_path() -> PathBuf {
     PathBuf::from(
@@ -90,6 +93,86 @@ impl bindings::dekopon::http::client::Host for State {
     fn send(&mut self, request: Request) -> Result<Response, HttpError> {
         self.requests.push(request);
         Ok(self.response.clone())
+    }
+
+    fn stream(&mut self, _request: StreamedRequest) -> Result<StreamedResponse, HttpError> {
+        panic!("buffered-only provider must not stream HTTP")
+    }
+}
+
+// HTTP 1.1.0 references asset types. No asset operation is part of this provider's contract;
+// fail every unexpected call rather than silently accepting new behavior.
+impl asset::HostHandle for State {
+    fn info(&mut self, _handle: Resource<asset::Handle>) -> asset::Info {
+        panic!("buffered-only provider must not inspect assets")
+    }
+
+    fn read(
+        &mut self,
+        _handle: Resource<asset::Handle>,
+        _len: u32,
+    ) -> Result<Vec<u8>, asset::Error> {
+        panic!("buffered-only provider must not read assets")
+    }
+
+    fn read_at(
+        &mut self,
+        _handle: Resource<asset::Handle>,
+        _offset: u64,
+        _len: u32,
+    ) -> Result<Vec<u8>, asset::Error> {
+        panic!("buffered-only provider must not read assets")
+    }
+
+    fn drop(&mut self, _handle: Resource<asset::Handle>) -> wasmtime::Result<()> {
+        panic!("buffered-only provider must not own asset handles")
+    }
+}
+
+impl asset::HostWriter for State {
+    fn write(
+        &mut self,
+        _writer: Resource<asset::Writer>,
+        _bytes: Vec<u8>,
+    ) -> Result<(), asset::Error> {
+        panic!("buffered-only provider must not write assets")
+    }
+
+    fn drop(&mut self, _writer: Resource<asset::Writer>) -> wasmtime::Result<()> {
+        panic!("buffered-only provider must not own asset writers")
+    }
+}
+
+impl asset::Host for State {
+    fn open(&mut self, _reference: String) -> Result<Resource<asset::Handle>, asset::Error> {
+        panic!("buffered-only provider must not open assets")
+    }
+
+    fn allocate(
+        &mut self,
+        _content_type: String,
+        _encoding: asset::Encoding,
+    ) -> Result<Resource<asset::Writer>, asset::Error> {
+        panic!("buffered-only provider must not allocate assets")
+    }
+
+    fn attach(
+        &mut self,
+        _writer: Resource<asset::Writer>,
+    ) -> Result<Resource<asset::Handle>, asset::Error> {
+        panic!("buffered-only provider must not attach assets")
+    }
+
+    fn list(&mut self) -> Vec<asset::Info> {
+        panic!("buffered-only provider must not list assets")
+    }
+
+    fn remove(&mut self, _handle: Resource<asset::Handle>) -> Result<(), asset::Error> {
+        panic!("buffered-only provider must not remove assets")
+    }
+
+    fn send(&mut self, _handle: Resource<asset::Handle>) -> Result<(), asset::Error> {
+        panic!("buffered-only provider must not send assets")
     }
 }
 
@@ -241,13 +324,13 @@ fn assert_request(request: &Request, uri: &str) {
 
 /// A host that links nothing must not be able to instantiate this component.
 ///
-/// The property is the component's, not any one host's: `dekopon:http/client@1.0.0` is privileged
+/// The property is the component's, not any one host's: `dekopon:http/client@1.1.0` is privileged
 /// and is satisfied only by a host that deliberately links it. This is asserted against an empty
 /// Wasmtime linker rather than a named import-free host crate so it keeps holding as the Dekopon
 /// tree rearranges its hosts.
 #[test]
 #[serial_test::serial]
-fn immediate_host_refuses_the_sole_privileged_import() {
+fn immediate_host_refuses_privileged_imports() {
     let path = component_path();
     let bytes = std::fs::metadata(&path)
         .unwrap_or_else(|error| panic!("build {} first: {error}", path.display()))
