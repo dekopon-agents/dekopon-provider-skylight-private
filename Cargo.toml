@@ -26,7 +26,7 @@ dekopon-capability = { version = "=0.18.0", default-features = false }
 dekopon-core = { version = "=0.18.0", default-features = false }
 serial_test = "=4.0.1"
 tokio = { version = "=1.49.0", features = ["macros", "rt-multi-thread"] }
-wasmtime = { version = "=48.0.2", default-features = false, features = ["async", "component-model", "cranelift", "parallel-compilation", "runtime", "std"] }
+wasmtime = { version = "=48.0.3", default-features = false, features = ["async", "component-model", "cranelift", "parallel-compilation", "runtime", "std"] }
 
 # The generated wit-bindgen export shims expand at crate scope. Denying unsafe code here would
 # require a crate-wide exception and would not protect provider-authored code.
