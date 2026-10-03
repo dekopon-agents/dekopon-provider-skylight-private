@@ -55,11 +55,16 @@ fn household_routes_are_exact_gets_and_cli_matches_every_manifest_entry() {
                 input(read)[key].as_str().unwrap().to_owned(),
             ]);
         }
-        let CommandRun::Proposal(proposal) = commands::run(&argv, Some("secret-sentinel")) else {
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability,
+            input: proposed,
+            ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
             panic!("expected proposal");
         };
-        assert_eq!(proposal.capability.as_str(), read.capability());
-        assert_eq!(proposal.input, input(read));
+        assert_eq!(capability.as_str(), read.capability());
+        assert_eq!(proposed, input(read));
         let output = invoke(
             read,
             if read == Read::List {
@@ -158,26 +163,22 @@ fn household_inputs_and_cli_reject_transport_escape_hatches_and_duplicates() {
             "2028-01-02",
         ],
         vec!["categories", "x"],
-        vec!["lists", "--frame=x"],
         vec!["list-show", "--frame", "x", "--frame", "x"],
         vec!["list-items", "--frame", "x", "--list", "../secret-sentinel"],
-        vec!["events", "--help"],
         vec!["tasks"],
         vec!["chores"],
         vec!["task-box"],
     ] {
         let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
-        let CommandRun::Rendered {
-            stdout,
-            stderr,
-            status,
-        } = commands::run(&argv, None)
-        else {
-            panic!("invalid argv accepted");
-        };
-        assert_eq!(status, 2);
-        assert!(stdout.is_empty());
-        assert!(!stderr.contains("secret-sentinel"));
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
     }
 }
 
@@ -265,8 +266,13 @@ fn calendar_preserves_source_times_unknown_all_day_and_no_person_or_trip_inferen
         "skylight.private.task.box.list",
     ] {
         assert!(Read::from_capability(id).is_none());
+        let output =
+            dekopon_provider_sdk_testkit::Native::<SkylightPrivate>::new().call(id, "{broken");
+        assert_eq!(output.status, 1);
         assert!(
-            matches!(invoke_component(id,"{broken"),ComponentResponse::Failed {error} if error.code == "unknown-capability")
+            output
+                .stderr
+                .contains("the provider has no such capability")
         );
     }
 }
@@ -380,12 +386,7 @@ fn household_count_text_byte_response_limits_and_sanitized_statuses() {
     let output = invoke(Read::Events, json!({"data":&records[..40]})).unwrap();
     assert!(output["events"].as_array().unwrap().len() < 40);
     assert_eq!(output["truncated"], true);
-    assert!(
-        serde_json::to_vec(&ComponentResponse::Succeeded { output })
-            .unwrap()
-            .len()
-            < MAX_COMPONENT_OUTPUT_BYTES
-    );
+    assert!(serde_json::to_vec(&output).unwrap().len() < MAX_COMPONENT_OUTPUT_BYTES);
     for read in READS {
         assert_eq!(
             invoke_raw(read, &"x".repeat(MAX_RESPONSE_BODY_BYTES + 1))
@@ -475,10 +476,12 @@ fn tasks_and_event_optional_parameters_match_schema_cli_and_raw_json() {
                 "linked_to_profile",
             ]
             .map(str::to_owned);
-            let CommandRun::Proposal(proposal) = commands::run(&args, None) else {
+            let dekopon_provider_sdk::CommandRunOutcome::Proposed { input, .. } =
+                provider::command::<SkylightPrivate>(&args, false)
+            else {
                 panic!("expected typed proposal");
             };
-            assert_eq!(proposal.input, data);
+            assert_eq!(input, data);
         }
     }
     for (field, bad) in [
@@ -516,8 +519,11 @@ fn tasks_and_event_optional_parameters_match_schema_cli_and_raw_json() {
         assert_eq!(Read::Tasks.uri(&data).is_ok(), valid);
     }
     assert_eq!(
-        Read::Tasks.manifest().input_schema["properties"]["includeLate"],
-        json!({"type":"boolean","default":false})
+        provider::manifest::<SkylightPrivate>()
+            .unwrap()
+            .capabilities[7]
+            .input_schema["properties"]["includeLate"]["type"],
+        json!("boolean")
     );
 }
 

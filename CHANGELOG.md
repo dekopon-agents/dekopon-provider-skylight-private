@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-10-03
+
+### Changed
+
+- Migrate to typed SDK stdio on published Dekopon core 0.31.0; retain fixed private read boundaries and broker credential isolation.
+- Use `skylight-private.*` capability IDs and a 1 MiB component artifact ceiling.
+
 ## [0.5.0] - 2026-09-20
 
 ### Changed

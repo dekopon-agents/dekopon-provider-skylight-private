@@ -1,6 +1,127 @@
 //! Bounded source-backed household reads. Linkage is evidence, not person identity.
 use super::*;
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FrameInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+}
+impl FrameInput {
+    pub(crate) fn new(frame_id: String) -> Self {
+        Self { frame_id }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+}
+impl ListInput {
+    pub(crate) fn new(frame_id: String, list_id: String) -> Self {
+        Self { frame_id, list_id }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EventsInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    date_min: String,
+    #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    date_max: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_+/-]+$"))]
+    timezone: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["categories,calendar_account,event_notification_setting"]))]
+    include: Option<String>,
+}
+impl EventsInput {
+    pub(crate) fn new(
+        frame_id: String,
+        date_min: String,
+        date_max: String,
+        timezone: String,
+        include: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            date_min,
+            date_max,
+            timezone,
+            include,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TasksInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    after: String,
+    #[schemars(regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    before: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool", extend("default" = false))]
+    include_late: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool", extend("default" = false))]
+    include_up_for_grabs: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["linked_to_profile"], "default" = "linked_to_profile"))]
+    filter: Option<String>,
+}
+impl TasksInput {
+    pub(crate) fn new(
+        frame_id: String,
+        after: String,
+        before: String,
+        include_late: Option<bool>,
+        include_up_for_grabs: Option<bool>,
+        filter: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            after,
+            before,
+            include_late,
+            include_up_for_grabs,
+            filter,
+        }
+    }
+}
+
+fn present_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+fn present_bool<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Read {
     Categories,
@@ -11,6 +132,7 @@ pub(crate) enum Read {
     Tasks,
 }
 
+#[cfg(test)]
 pub(crate) const READS: [Read; 6] = [
     Read::Categories,
     Read::Events,
@@ -24,17 +146,19 @@ const EVENT_INCLUDE: &str = "categories,calendar_account,event_notification_sett
 const TASK_FILTER: &str = "linked_to_profile";
 
 impl Read {
+    #[cfg(test)]
     pub(crate) fn capability(self) -> &'static str {
         match self {
-            Self::Categories => "skylight.private.categories.list",
-            Self::Events => "skylight.private.calendar.events.list",
-            Self::Lists => "skylight.private.lists.list",
-            Self::List => "skylight.private.lists.read",
-            Self::Items => "skylight.private.list.items.list",
-            Self::Tasks => "skylight.private.tasks.list",
+            Self::Categories => "skylight-private.categories.list",
+            Self::Events => "skylight-private.calendar.events.list",
+            Self::Lists => "skylight-private.lists.list",
+            Self::List => "skylight-private.lists.read",
+            Self::Items => "skylight-private.list.items.list",
+            Self::Tasks => "skylight-private.tasks.list",
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_capability(id: &str) -> Option<Self> {
         READS.into_iter().find(|read| read.capability() == id)
     }
@@ -68,7 +192,8 @@ impl Read {
         )
     }
 
-    pub(crate) fn manifest(self) -> ProviderCapability {
+    #[cfg(test)]
+    pub(crate) fn manifest(self) -> dekopon_provider_sdk::ProviderCapability {
         let mut properties = serde_json::Map::new();
         for (_, field) in self.fields() {
             let schema = match *field {
@@ -87,7 +212,7 @@ impl Read {
             };
             properties.insert((*field).to_owned(), schema);
         }
-        ProviderCapability {
+        dekopon_provider_sdk::ProviderCapability {
             id: self.capability().parse().expect("static capability"),
             description: match self {
                 Self::Tasks => "Reads bounded source chores and assignment linkage; outstanding coverage unknown",
@@ -200,18 +325,23 @@ impl Read {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn invoke<F>(self, input: Value, send: F) -> Result<Value, ProviderError>
     where
         F: FnOnce(Request) -> Result<Response, HttpError>,
     {
         let body = send_once(&self.uri(&input)?, send)?;
+        self.project_body(&body)
+    }
+
+    pub(crate) fn project_body(self, body: &[u8]) -> Result<Value, ProviderError> {
         match self {
-            Self::Categories => project(&body, "categories", false, ProjectionKind::Category),
-            Self::Events => project(&body, "events", false, ProjectionKind::Event),
-            Self::Lists => project(&body, "lists", false, ProjectionKind::List),
-            Self::List => project(&body, "list", true, ProjectionKind::List),
-            Self::Items => project(&body, "items", false, ProjectionKind::Item),
-            Self::Tasks => project(&body, "tasks", false, ProjectionKind::Task),
+            Self::Categories => project(body, "categories", false, ProjectionKind::Category),
+            Self::Events => project(body, "events", false, ProjectionKind::Event),
+            Self::Lists => project(body, "lists", false, ProjectionKind::List),
+            Self::List => project(body, "list", true, ProjectionKind::List),
+            Self::Items => project(body, "items", false, ProjectionKind::Item),
+            Self::Tasks => project(body, "tasks", false, ProjectionKind::Task),
         }
     }
 }
@@ -219,7 +349,7 @@ impl Read {
 pub(crate) fn invalid_household_input() -> ProviderError {
     ProviderError::new(
         "invalid-input",
-        "input must match the bounded Skylight read schema",
+        "the input does not match the capability's input schema",
     )
 }
 
@@ -1028,6 +1158,7 @@ fn resolve_linkage(record: &mut Value, identities: &HashSet<(String, String)>) {
 }
 
 /// Parse the raw wire input as a scalar map: duplicate fields must not disappear into Value.
+#[cfg(test)]
 pub(crate) fn parse_input(raw: &str) -> Result<Value, ProviderError> {
     struct InputVisitor;
     impl<'de> Visitor<'de> for InputVisitor {
