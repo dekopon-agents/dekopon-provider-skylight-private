@@ -13,13 +13,16 @@
 //! The `skylight` command word proposes the same capabilities from argv; see `commands`.
 
 use std::collections::{BTreeMap, HashSet};
-use std::{fmt, marker::PhantomData};
+use std::{fmt, io::Write, marker::PhantomData};
 
-use dekopon_provider_http::{Header, HttpError, Request, Response, method};
-use dekopon_provider_sdk::{
-    CapabilityId, CommandRun, ComponentFailure, ComponentResponse, EffectKind, Provider,
-    ProviderApiVersion, ProviderCapability, ProviderError, ProviderManifest, RiskLevel,
+#[cfg(test)]
+use dekopon_provider_sdk::provider;
+use dekopon_provider_sdk::provider::{
+    Capability, Code, Failure, Http, Proposal, Provider, Stdout, Usage,
 };
+use dekopon_provider_sdk::provider::{Header, HttpError, Request, Response, method};
+use dekopon_provider_sdk::{EffectKind, RiskLevel};
+use schemars::JsonSchema;
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{MapAccess, SeqAccess, Visitor, value::MapAccessDeserializer},
@@ -31,8 +34,10 @@ mod household;
 #[cfg(test)]
 mod household_tests;
 
-const ACCOUNT_CAPABILITY: &str = "skylight.private.account.read";
-const FRAMES_CAPABILITY: &str = "skylight.private.frames.list";
+#[cfg(test)]
+const ACCOUNT_CAPABILITY: &str = "skylight-private.account.read";
+#[cfg(test)]
+const FRAMES_CAPABILITY: &str = "skylight-private.frames.list";
 /// The word an agent's shell types to reach this provider: not reserved by the shell, and free of
 /// the `.`, `-`, and `_` separators that would let it parse as a capability identifier.
 const COMMAND_WORD: &str = "skylight";
@@ -49,8 +54,8 @@ const MAX_NAME_BYTES: usize = 256;
 const MAX_FRAMES: usize = 32;
 const MAX_RESPONSE_BODY_BYTES: usize = 256 * 1024;
 const MAX_COMPONENT_OUTPUT_BYTES: usize = 32 * 1024;
-/// Leave room for the SDK's fixed `{"outcome":"succeeded","output":...}` envelope so the complete
-/// component result, not just the projected value, remains below 32 KiB.
+/// Leave room for the terminating newline and future bounded projection metadata, so each
+/// emitted stdout line stays below the 32 KiB component-output budget.
 const COMPONENT_OUTPUT_ENVELOPE_RESERVE: usize = 128;
 const MAX_PROJECTED_OUTPUT_BYTES: usize =
     MAX_COMPONENT_OUTPUT_BYTES - COMPONENT_OUTPUT_ENVELOPE_RESERVE;
@@ -78,71 +83,179 @@ static EMBEDDED_LICENSE_MIT: [u8; include_bytes!("../LICENSE-MIT").len()] =
 static EMBEDDED_LICENSE_APACHE: [u8; include_bytes!("../LICENSE-APACHE").len()] =
     *include_bytes!("../LICENSE-APACHE");
 
-mod bindings {
-    wit_bindgen::generate!({
-        path: "wit",
-        world: "provider",
-        generate_all,
-        pub_export_macro: true,
-    });
-}
-
-struct SkylightPrivate;
+pub struct SkylightPrivate;
 
 impl Provider for SkylightPrivate {
-    fn manifest() -> ProviderManifest {
-        let capability = |id: &str, description: &str| ProviderCapability {
-            id: id.parse().expect("static capability ID is valid"),
-            description: description.to_owned(),
-            effect: EffectKind::ReadOnly,
-            risk: RiskLevel::Medium,
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-        };
+    const ID: &'static str = "skylight-private";
+    const COMMAND_WORDS: &'static [&'static str] = &[COMMAND_WORD];
+    const DESCRIPTION: &'static str =
+        "Unsupported private Skylight account and frame reads over broker HTTP";
+    type Args = commands::Args;
+    type Capabilities = (
+        Account,
+        Frames,
+        Categories,
+        Events,
+        Lists,
+        List,
+        Items,
+        Tasks,
+    );
 
-        ProviderManifest {
-            api_version: ProviderApiVersion::V1Alpha1,
-            id: "skylight-private"
-                .parse()
-                .expect("static provider ID is valid"),
-            description: "Unsupported private Skylight account and frame reads over broker HTTP"
-                .to_owned(),
-            command_words: vec![COMMAND_WORD.to_owned()],
-            capabilities: vec![
-                capability(
-                    ACCOUNT_CAPABILITY,
-                    "Reads only the bearer-selected account identifier",
-                ),
-                capability(
-                    FRAMES_CAPABILITY,
-                    "Lists bounded identifiers and optional names for visible frames",
-                ),
-            ]
-            .into_iter()
-            .chain(household::READS.map(household::Read::manifest))
-            .collect(),
-        }
-    }
-
-    fn invoke(capability: &CapabilityId, input: Value) -> Result<Value, ProviderError> {
-        invoke_with(capability, input, dekopon_provider_http::send)
-    }
-
-    fn run_command(argv: &[String], stdin: Option<&str>) -> Result<CommandRun, ProviderError> {
-        Ok(commands::run(argv, stdin))
+    fn propose(args: Self::Args, _stdin_piped: bool) -> Result<Proposal<Self>, Usage> {
+        commands::propose(args)
     }
 }
 
-/// Empty only by construction: the explicit object check below distinguishes `{}` from every other
-/// JSON value, while `deny_unknown_fields` keeps this Rust decoder aligned with the manifest.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct EmptyInput {}
+pub struct EmptyInput {}
 
-fn invoke_with<F>(capability: &CapabilityId, input: Value, send: F) -> Result<Value, ProviderError>
+macro_rules! read_capability {
+    ($name:ident, $suffix:literal, $description:literal, $input:ty, $uri:expr, $project:expr) => {
+        pub struct $name;
+        impl Capability for $name {
+            type Provider = SkylightPrivate;
+            const NAME: &'static str = $suffix;
+            const DESCRIPTION: &'static str = $description;
+            const EFFECT: EffectKind = EffectKind::ReadOnly;
+            const RISK: RiskLevel = RiskLevel::Medium;
+            type Input = $input;
+            type Needs = Http;
+            type Error = ProviderError;
+
+            fn run(input: Self::Input, http: Http, out: &mut Stdout) -> Result<(), Self::Error> {
+                let input = serde_json::to_value(input).map_err(|_| invalid_input())?;
+                let uri: String = ($uri)(&input)?;
+                let body = send_once(&uri, |request| http.send(request))?;
+                let output: Value = ($project)(&body)?;
+                write_output(out, &output)
+            }
+        }
+    };
+}
+
+fn write_output(out: &mut Stdout, output: &Value) -> Result<(), ProviderError> {
+    serde_json::to_writer(&mut *out, output).map_err(|_| invalid_response())?;
+    out.write_all(b"\n").map_err(|_| invalid_response())
+}
+
+fn account_output(body: &[u8]) -> Result<Value, ProviderError> {
+    let envelope = decode_account(body)?;
+    validate_id(&envelope.data.0.id)?;
+    bounded_output(json!({"account": {"id": envelope.data.0.id}}))
+}
+fn frames_output(body: &[u8]) -> Result<Value, ProviderError> {
+    project_frames(decode_frames(body)?.data)
+}
+
+read_capability!(
+    Account,
+    "account.read",
+    "Reads only the bearer-selected account identifier",
+    EmptyInput,
+    |_| Ok(ACCOUNT_URI.to_owned()),
+    account_output
+);
+read_capability!(
+    Frames,
+    "frames.list",
+    "Lists bounded identifiers and optional names for visible frames",
+    EmptyInput,
+    |_| Ok(FRAMES_URI.to_owned()),
+    frames_output
+);
+read_capability!(
+    Categories,
+    "categories.list",
+    "Lists bounded categories and family-member linkage; not inferred person identities",
+    household::FrameInput,
+    |input: &Value| household::Read::Categories.uri(input),
+    |body: &[u8]| household::Read::Categories.project_body(body)
+);
+read_capability!(
+    Events,
+    "calendar.events.list",
+    "Lists bounded calendar summaries and source times; completeness unknown",
+    household::EventsInput,
+    |input: &Value| household::Read::Events.uri(input),
+    |body: &[u8]| household::Read::Events.project_body(body)
+);
+read_capability!(
+    Lists,
+    "lists.list",
+    "Lists bounded list identifiers and labels; not Tasks",
+    household::FrameInput,
+    |input: &Value| household::Read::Lists.uri(input),
+    |body: &[u8]| household::Read::Lists.project_body(body)
+);
+read_capability!(
+    List,
+    "lists.read",
+    "Reads a list identifier and label; not Tasks",
+    household::ListInput,
+    |input: &Value| household::Read::List.uri(input),
+    |body: &[u8]| household::Read::List.project_body(body)
+);
+read_capability!(
+    Items,
+    "list.items.list",
+    "Lists bounded list item labels and source statuses; not dated assigned Tasks",
+    household::ListInput,
+    |input: &Value| household::Read::Items.uri(input),
+    |body: &[u8]| household::Read::Items.project_body(body)
+);
+read_capability!(
+    Tasks,
+    "tasks.list",
+    "Reads bounded source chores and assignment linkage; outstanding coverage unknown",
+    household::TasksInput,
+    |input: &Value| household::Read::Tasks.uri(input),
+    |body: &[u8]| household::Read::Tasks.project_body(body)
+);
+
+#[allow(unsafe_code)]
+mod export {
+    dekopon_provider_sdk::export!(super::SkylightPrivate);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderError {
+    code: &'static str,
+    message: &'static str,
+}
+impl ProviderError {
+    fn new(code: &'static str, message: &'static str) -> Self {
+        Self { code, message }
+    }
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+    pub fn message(&self) -> &'static str {
+        self.message
+    }
+}
+impl fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message)
+    }
+}
+impl Failure for ProviderError {
+    fn code(&self) -> Code {
+        if self.code == "invalid-input" {
+            Code::INVALID_INPUT
+        } else {
+            Code::new(self.code)
+        }
+    }
+}
+
+#[cfg(test)]
+fn invoke_with<F>(
+    capability: &dekopon_provider_sdk::CapabilityId,
+    input: Value,
+    send: F,
+) -> Result<Value, ProviderError>
 where
     F: FnOnce(Request) -> Result<Response, HttpError>,
 {
@@ -156,6 +269,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn read_account<F>(input: Value, send: F) -> Result<Value, ProviderError>
 where
     F: FnOnce(Request) -> Result<Response, HttpError>,
@@ -167,6 +281,7 @@ where
     bounded_output(json!({"account": {"id": envelope.data.0.id}}))
 }
 
+#[cfg(test)]
 fn list_frames<F>(input: Value, send: F) -> Result<Value, ProviderError>
 where
     F: FnOnce(Request) -> Result<Response, HttpError>,
@@ -177,6 +292,7 @@ where
     project_frames(envelope.data)
 }
 
+#[cfg(test)]
 fn validate_empty_input(input: Value) -> Result<(), ProviderError> {
     if !matches!(&input, Value::Object(fields) if fields.is_empty()) {
         return Err(invalid_input());
@@ -477,6 +593,7 @@ fn status_error(status: u16) -> ProviderError {
     }
 }
 
+#[cfg(test)]
 fn unknown_capability() -> ProviderError {
     ProviderError::new(
         "unknown-capability",
@@ -485,7 +602,10 @@ fn unknown_capability() -> ProviderError {
 }
 
 fn invalid_input() -> ProviderError {
-    ProviderError::new("invalid-input", "input must be exactly an empty object")
+    ProviderError::new(
+        "invalid-input",
+        "the input does not match the capability's input schema",
+    )
 }
 
 fn invalid_request() -> ProviderError {
@@ -506,70 +626,14 @@ fn invalid_response() -> ProviderError {
     )
 }
 
-fn failed_component_response(error: ProviderError) -> ComponentResponse {
-    ComponentResponse::Failed {
-        error: ComponentFailure {
-            code: error.code().to_owned(),
-            message: error.message().to_owned(),
-        },
-    }
-}
-
-fn invoke_component(capability: &str, input_json: &str) -> ComponentResponse {
-    // Unknown capability always wins, even over malformed JSON.
-    let read = household::Read::from_capability(capability);
-    if !matches!(capability, ACCOUNT_CAPABILITY | FRAMES_CAPABILITY) && read.is_none() {
-        return failed_component_response(unknown_capability());
-    }
-    let input = if read.is_some() {
-        household::parse_input(input_json)
-    } else {
-        serde_json::from_str::<Value>(input_json).map_err(|_| invalid_input())
-    };
-    let input = match input {
-        Ok(input) => input,
-        Err(error) => return failed_component_response(error),
-    };
-    let capability = capability
-        .parse::<CapabilityId>()
-        .expect("the matched static capability IDs are valid");
-    match SkylightPrivate::invoke(&capability, input) {
-        Ok(output) => ComponentResponse::Succeeded { output },
-        Err(error) => failed_component_response(error),
-    }
-}
-
-/// Hand-written rather than `export_provider_with_cli!`: the SDK's generic `invoke` parses the
-/// capability and the JSON before the provider sees either, so malformed syntax would surface as
-/// `invalid-capability` and parser detail would reach the caller. `describe` and `run-command` have
-/// no such boundary and are the SDK's own.
-struct SkylightPrivateComponent;
-
-impl bindings::Guest for SkylightPrivateComponent {
-    fn describe() -> String {
-        dekopon_provider_sdk::__describe::<SkylightPrivate>()
-    }
-
-    fn run_command(argv: Vec<String>, stdin: Option<String>) -> String {
-        dekopon_provider_sdk::__run_command::<SkylightPrivate>(argv, stdin)
-    }
-
-    fn invoke(capability: String, input_json: String) -> String {
-        // Strings and serde_json::Value have no fallible JSON representation. Unlike the generic
-        // SDK shim, this boundary cannot emit parser detail or an unlisted serialization failure.
-        serde_json::to_string(&invoke_component(&capability, &input_json))
-            .expect("ComponentResponse always has a JSON representation")
-    }
-}
-
-bindings::export!(SkylightPrivateComponent with_types_in bindings);
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
-    use dekopon_provider_http::{Header, HttpError, HttpErrorCode, Request, Response};
-    use dekopon_provider_sdk::{EffectKind, Provider, RiskLevel};
+    use dekopon_provider_sdk::provider::{
+        self, Header, HttpError, HttpErrorCode, Request, Response,
+    };
+    use dekopon_provider_sdk::{EffectKind, RiskLevel};
     use serde_json::{Map, Value, json};
 
     use super::{
@@ -621,10 +685,7 @@ mod tests {
         }
     }
 
-    fn invoke_json(
-        capability_id: &str,
-        body: Value,
-    ) -> Result<Value, dekopon_provider_sdk::ProviderError> {
+    fn invoke_json(capability_id: &str, body: Value) -> Result<Value, super::ProviderError> {
         invoke_with(&capability(capability_id), json!({}), |_| {
             Ok(json_response(200, body))
         })
@@ -644,7 +705,7 @@ mod tests {
 
     #[test]
     fn manifest_preserves_legacy_and_adds_only_approved_medium_reads() {
-        let manifest = SkylightPrivate::manifest();
+        let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
         assert_eq!(manifest.capabilities.len(), 8);
@@ -661,7 +722,6 @@ mod tests {
         );
         let empty_schema = json!({
             "type": "object",
-            "properties": {},
             "additionalProperties": false
         });
         for capability in &manifest.capabilities {
@@ -1100,18 +1160,17 @@ mod tests {
     }
 
     #[test]
-    fn complete_manifest_text_and_api_are_stable() {
-        let mut manifest = SkylightPrivate::manifest();
-        manifest.capabilities.truncate(2);
-        let encoded = serde_json::to_string(&manifest).expect("the fixed manifest serializes");
-        assert_eq!(
-            encoded,
-            concat!(
-                r#"{"apiVersion":"dekopon.dev/provider/v1alpha1","id":"skylight-private","description":"Unsupported private Skylight account and frame reads over broker HTTP","capabilities":["#,
-                r#"{"id":"skylight.private.account.read","description":"Reads only the bearer-selected account identifier","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}},"#,
-                r#"{"id":"skylight.private.frames.list","description":"Lists bounded identifiers and optional names for visible frames","effect":"read-only","risk":"Medium","inputSchema":{"additionalProperties":false,"properties":{},"type":"object"}}],"commandWords":["skylight"]}"#
-            )
-        );
+    fn typed_manifest_has_exact_provider_and_authority() {
+        let manifest = provider::manifest::<SkylightPrivate>().unwrap();
+        assert_eq!(manifest.id.as_str(), "skylight-private");
+        assert_eq!(manifest.command_words, ["skylight"]);
+        assert_eq!(manifest.capabilities.len(), 8);
+        for capability in &manifest.capabilities {
+            assert!(capability.id.as_str().starts_with("skylight-private."));
+            assert_eq!(capability.effect, EffectKind::ReadOnly);
+            assert_eq!(capability.risk, RiskLevel::Medium);
+            assert_eq!(capability.input_schema["additionalProperties"], false);
+        }
     }
 
     #[test]
@@ -1133,7 +1192,10 @@ mod tests {
                 "unknown-capability",
                 "unsupported Skylight private capability",
             ),
-            ("invalid-input", "input must be exactly an empty object"),
+            (
+                "invalid-input",
+                "the input does not match the capability's input schema",
+            ),
             (
                 "invalid-request",
                 "could not construct the fixed Skylight request",
@@ -1264,12 +1326,10 @@ mod tests {
             .collect::<Vec<_>>();
         let output = invoke_json(FRAMES_CAPABILITY, json!({"data": data}))
             .expect("the worst-case bounded projection succeeds");
-        let response = dekopon_provider_sdk::ComponentResponse::Succeeded { output };
-        let encoded = serde_json::to_vec(&response).expect("the SDK response serializes");
-        assert!(encoded.len() < MAX_COMPONENT_OUTPUT_BYTES);
-        let decoded: dekopon_provider_sdk::ComponentResponse =
-            serde_json::from_slice(&encoded).expect("the SDK response round-trips");
-        assert_eq!(decoded, response);
+        let encoded = serde_json::to_vec(&output).expect("stdout JSON serializes");
+        assert!(encoded.len() + 1 < MAX_COMPONENT_OUTPUT_BYTES);
+        let decoded: Value = serde_json::from_slice(&encoded).expect("stdout JSON round-trips");
+        assert_eq!(decoded, output);
     }
 
     #[test]

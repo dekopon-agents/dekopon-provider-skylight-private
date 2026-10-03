@@ -12,14 +12,14 @@ Medium-risk and read-only. All requests use `https://app.ourskylight.com/api`:
 
 | Capability | GET route | Small projection |
 |---|---|---|
-| `skylight.private.account.read` | `/user` | `account.id` only (not full Python `whoami`) |
-| `skylight.private.frames.list` | `/frames` | At most 32 sorted frame IDs and optional names |
-| `skylight.private.categories.list` | `/frames/{frameId}/categories` | `categories`: IDs, labels, profile flags, family-member linkage; no inferred identity |
-| `skylight.private.calendar.events.list` | `/frames/{frameId}/calendar_events?date_min=…&date_max=…&timezone=…[&include=…]` | `events`: source times, summaries, recurrence, multiple category linkages |
-| `skylight.private.lists.list` | `/frames/{frameId}/lists` | `lists`: labels, kind/color/flags, linked included items |
-| `skylight.private.lists.read` | `/frames/{frameId}/lists/{listId}` | `list`: metadata and linked included items; section count only |
-| `skylight.private.list.items.list` | `/frames/{frameId}/lists/{listId}/list_items` | `items`: labels, source status, section, position/draft, list linkage |
-| `skylight.private.tasks.list` | `/frames/{frameId}/chores?after=…&before=…&include_late=…&include_up_for_grabs=…&filter=linked_to_profile` | `tasks`: source status/dates/recurrence, separate assignment and completion-category linkage |
+| `skylight-private.account.read` | `/user` | `account.id` only (not full Python `whoami`) |
+| `skylight-private.frames.list` | `/frames` | At most 32 sorted frame IDs and optional names |
+| `skylight-private.categories.list` | `/frames/{frameId}/categories` | `categories`: IDs, labels, profile flags, family-member linkage; no inferred identity |
+| `skylight-private.calendar.events.list` | `/frames/{frameId}/calendar_events?date_min=…&date_max=…&timezone=…[&include=…]` | `events`: source times, summaries, recurrence, multiple category linkages |
+| `skylight-private.lists.list` | `/frames/{frameId}/lists` | `lists`: labels, kind/color/flags, linked included items |
+| `skylight-private.lists.read` | `/frames/{frameId}/lists/{listId}` | `list`: metadata and linked included items; section count only |
+| `skylight-private.list.items.list` | `/frames/{frameId}/lists/{listId}/list_items` | `items`: labels, source status, section, position/draft, list linkage |
+| `skylight-private.tasks.list` | `/frames/{frameId}/chores?after=…&before=…&include_late=…&include_up_for_grabs=…&filter=linked_to_profile` | `tasks`: source status/dates/recurrence, separate assignment and completion-category linkage |
 
 The legacy manifest description remains `Unsupported private Skylight account and frame reads over
 broker HTTP`. The command word is `skylight`. Original account/frames inputs and outputs are unchanged.
@@ -159,7 +159,7 @@ Source text (labels, summaries, descriptions, statuses, section) is capped to 25
 local text loss per record. Record/top-level `truncated` also marks rule/linkage count loss;
 `rruleTruncated`/`recurrenceSetTruncated` and linkage-array `truncated` make those omissions explicit.
 Top-level `truncated` marks any local text/count/byte/section omission; whole
-records are omitted to keep projected JSON at most 32,640 bytes and the SDK envelope below 32 KiB.
+records are omitted to keep projected JSON at most 32,640 bytes and the stdout line below 32 KiB.
 All new outputs include `projection:"typed-subset"`, `coverage:"bounded-response"`,
 `upstreamCompleteness:"unknown"` and explicit linkage/included/section coverage states.
 Combined output budgeting accounts for JSON escaping once per retained candidate; included records
@@ -171,9 +171,8 @@ Failures redact URI, status detail, headers, body, credentials and transport/par
 
 | Code | Message |
 |---|---|
-| `unknown-capability` | `unsupported Skylight private capability` |
-| `invalid-input` (account/frames) | `input must be exactly an empty object` |
-| `invalid-input` (new reads) | `input must match the bounded Skylight read schema` |
+| `unknown-capability` | `the provider has no such capability` (or a broker-level unknown-ID refusal) |
+| `invalid-input` | `the input does not match the capability's input schema` |
 | `invalid-request` | `could not construct the fixed Skylight request` |
 | `http-failed` | `broker HTTP request failed` |
 | `invalid-response` | `the private API returned an invalid response` |
@@ -193,7 +192,7 @@ host, method, one-request maximum, HTTPS-only posture, ten-second deadline, or b
 
 ```yaml
 constraintSets:
-  skylight.private.account.read:
+  skylight-private.account.read:
     provider: skylight-private
     effect: read-only
     risk: Medium
@@ -208,7 +207,7 @@ constraintSets:
         maxRequestBytes: 4096
         maxResponseBytes: 262144
         allowPlaintextLoopback: false
-  skylight.private.frames.list:
+  skylight-private.frames.list:
     provider: skylight-private
     effect: read-only
     risk: Medium
@@ -432,10 +431,9 @@ list index and populated detail included items were browser-observed. Every test
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. All Dekopon dependencies are exact crates.io 0.18.0 pins; there are no Git, path,
-symlink, submodule, or adjacent-checkout dependencies. The repository owns only its composed WIT
-world. Its three dependency WIT mirrors (provider, HTTP, and asset) are checked byte-for-byte
-against the resolved crates.io 0.18.0 package contents, not trusted by a local hash.
+1.259.0. Before core 0.31.0 publishes, the SDK and testkit use a reviewed core Git revision;
+release preparation repins them to exact published crates. The SDK owns the provider world and
+stdio bindings; this repository keeps no WIT mirror.
 
 ```console
 cargo fmt --all --check
@@ -448,8 +446,8 @@ DEKOPON_PROVIDER_COMPONENT=$PWD/skylight-private-provider.wasm \
 
 This mirrors the gates `ci / validate` in
 [`dekopon-agents/provider-workflows`](https://github.com/dekopon-agents/provider-workflows) runs:
-formatting, dependency policy, clippy for the host and for `wasm32-unknown-unknown`, the WIT
-mirror check, the component build, a raw wasmtime smoke test, the SBOM, and a byte-for-byte
+formatting, dependency policy, clippy for the host and for `wasm32-unknown-unknown`,
+the component build, component validation, the SBOM, and a byte-for-byte
 rebuild from a clean checkout. There is no local `scripts/` directory or `build.sh` in this
 repository anymore; `../provider-workflows/build.sh` is a sibling checkout of the shared
 workflows repository (see its own README for the exact clone step CI uses).
@@ -468,20 +466,16 @@ with `gh attestation verify skylight-private-provider.wasm --owner dekopon-agent
 distribution, and neither adds the provider to a default catalog, image, policy, credential set,
 package, or deployment.
 
-All behavior tests use synthetic in-memory responses. The component-host test implements the sole
-buffered HTTP WIT import in memory and opens no socket; unexpected streaming or asset calls fail
-the test. The real broker host is used only for pre-network authority, method, request-budget and credential-destination refusal; successful native broker HTTP cannot be safely mocked without
-changing the fixed production URI. No test contacts Skylight, a public host, DNS, or loopback, and
-no captured response fixture is permitted.
-
-The finished component must export only `describe`, `invoke`, and `run-command`, import exactly
-`dekopon:http/client@1.1.0`, and import no WASI, filesystem, environment, clock, random, socket,
-JavaScript, or other ambient interface. The immediate host refuses it because that host provides no
-HTTP import. HTTP 1.1.0's asset types require the asset WIT mirror at build time; unused stream
-and asset imports are eliminated from this buffered-only component. There is no tracked `security/` directory in this repository; the committed fuel,
-memory, and timeout ceilings and measured headroom now live only as the `MAX_*`/`TIMEOUT*`
-constants and the `committed_component_limits_are_exact` / `committed_broker_limits_are_exact`
-tests in `tests/component_host.rs` and `tests/broker_host.rs`.
+Tests use synthetic response bodies. Native tests run without a socket; real-component tests use
+the testkit's pinned loopback HTTPS origin and broker authorization, never contact Skylight or a
+public host, and assert private response fields never appear on stdout. The provider's fixed
+GET endpoints cannot be overridden by caller input. The current testkit serves HTTPS on an
+ephemeral port and cannot answer for the fixed `app.ourskylight.com:443` authority: successful
+projection is compared with the original native fixtures; real-component conformance, denied
+broker calls and credential-destination refusals cover the component. A real-component positive
+read waits for the authorized post-rollout gallery, not a claim of local coverage. The SDK's typed export uses
+`dekopon:provider@0.4.0` and `dekopon:stdio/streams@0.1.0`, with broker-owned HTTP; no WASI or
+ambient filesystem, environment, clock, random, or socket imports are permitted.
 
 ### Read-contract evidence and resource-budget increment
 
