@@ -490,9 +490,12 @@ recurrence-instance semantics, section schemas and complete household coverage r
 Successful browser reads use the browser's separate authentication context; native broker HTTP
 success still requires separately authorized validation. No credential/session data is in fixtures.
 
-The typed Tasks/relationships/included decoder requires a parent-approved component artifact ceiling
-of **589,824 bytes (576 KiB)**, replacing 393,216 bytes. This changes only the artifact-size gate:
-**128,000,000 fuel, 32 MiB guest memory, ten seconds, one GET, 4 KiB input/request, 256 KiB response,
-and <32 KiB component output are unchanged**. No dependencies, compiler profiles, shared CI or
-ambient imports are added. Minimal records retain lazy boxed attributes/relationships and only the
-final selected resources are projected, preserving descending-input resource bounds.
+The component artifact ceiling is **1,048,576 bytes (1 MiB)**. The former 589,824-byte
+(576 KiB) bound predated the SDK-owned stdio bindings and typed export, which add code without
+adding ambient authority. This changes only the artifact-size gate: **128,000,000 fuel,
+32 MiB guest memory, ten seconds, one GET, 4 KiB input/request, 256 KiB response, and
+<32 KiB component output are unchanged**. Native 20,000-record synthetic responses exercise
+bounded projection and malformed tails; real-component broker refusals exercise the configured
+host limits. Positive real-component HTTP at the fixed private authority remains deferred as
+explained above. Minimal records retain lazy boxed attributes/relationships and only the final
+selected resources are projected, preserving descending-input resource bounds.

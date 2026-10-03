@@ -30,6 +30,45 @@ fn component() -> PathBuf {
         .expect("build the component first")
         .into()
 }
+
+#[test]
+fn sdk_component_fits_one_mib_and_preserves_broker_resource_limits() {
+    let bytes = std::fs::metadata(component())
+        .expect("built component")
+        .len();
+    assert!(
+        bytes <= 1_048_576,
+        "typed stdio component is {bytes} bytes; limit is 1 MiB"
+    );
+    let limits = limits();
+    assert_eq!(limits.max_memory_bytes, 32 * 1024 * 1024);
+    assert_eq!(limits.fuel, 128_000_000);
+    assert_eq!(limits.max_input_bytes, 4096);
+    assert_eq!(limits.max_output_bytes, 32 * 1024);
+    assert_eq!(limits.max_http_requests, 1);
+    assert_eq!(limits.max_http_request_bytes, 4096);
+    assert_eq!(limits.max_http_response_bytes, 262_144);
+    assert_eq!(limits.max_timeout, Duration::from_secs(10));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_component_fuel_exhaustion_refuses_even_description_before_http() {
+    let error = match BrokerProviderRegistry::load(
+        [component()],
+        BrokerHostLimits {
+            fuel: 1,
+            ..limits()
+        },
+    )
+    .await
+    {
+        Ok(_) => panic!("one fuel unit cannot load the component"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, BrokerHostError::Instantiate { .. }));
+    assert!(format!("{error:?}").contains("all fuel consumed"));
+    // The broker never constructed an authorized invocation or connected to a host.
+}
 fn grant(authority: &str, method: &str, bytes: u64) -> ExecutionConstraints {
     ExecutionConstraints {
         timeout_ms: 10_000,

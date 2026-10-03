@@ -1,5 +1,9 @@
 //! Real stdio component, broker-host and native boundaries; synthetic account data only.
-use std::path::PathBuf;
+use std::{
+    io::Write as _,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use dekopon_provider_sdk::{
     CommandRunOutcome,
@@ -275,6 +279,114 @@ fn all_eight_reads_retain_bounded_native_projections() -> TestResult {
         } else {
             assert_eq!(value["coverage"], "bounded-response");
             assert_eq!(value["upstreamCompleteness"], "unknown");
+        }
+    }
+    Ok(())
+}
+
+/// 20,000 JSON resources, 260,010 bytes (below the 256 KiB response limit). No real
+/// destination or credential is used; the testkit returns these bytes in process.
+fn near_limit_body(malformed: bool, descending: bool, capability: &str) -> Vec<u8> {
+    let mut body = Vec::with_capacity(262_144);
+    body.extend_from_slice(br#"{"data":["#);
+    for position in 0..20_000 {
+        if position != 0 {
+            body.push(b',');
+        }
+        let index = if descending {
+            19_999 - position
+        } else {
+            (position * 7_919 + 1_237) % 20_000
+        };
+        let id = char::from_u32(0x0800 + index as u32).unwrap();
+        if malformed && position == 19_999 {
+            match capability {
+                FRAMES => write!(&mut body, r#"{{"id":"{id}","attributes":{{"name":"ok","name":null}}}}"#).unwrap(),
+                "skylight-private.calendar.events.list" => write!(&mut body, r#"{{"id":"{id}","attributes":{{"all_day":null,"all_day":true}}}}"#).unwrap(),
+                "skylight-private.tasks.list" => write!(&mut body, r#"{{"id":"{id}","attributes":{{"recurrence_set":["RRULE:FREQ=DAILY",false]}}}}"#).unwrap(),
+                _ => unreachable!("bounded fixture capability"),
+            }
+        } else {
+            write!(&mut body, r#"{{"id":"{id}"}}"#).unwrap();
+        }
+    }
+    body.extend_from_slice(b"]}");
+    if !malformed {
+        assert_eq!(body.len(), 260_010);
+    }
+    assert!((260_000..=262_144).contains(&body.len()));
+    body
+}
+
+#[test]
+fn native_near_response_limit_validates_every_tail_and_bounds_output_and_deadline() -> TestResult {
+    for descending in [false, true] {
+        for malformed in [false, true] {
+            for (capability, input, key, retained) in [
+                (FRAMES, "{}", "frames", 32),
+                (
+                    "skylight-private.calendar.events.list",
+                    r#"{"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}"#,
+                    "events",
+                    64,
+                ),
+                (
+                    "skylight-private.tasks.list",
+                    r#"{"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11"}"#,
+                    "tasks",
+                    64,
+                ),
+            ] {
+                let body = near_limit_body(malformed, descending, capability);
+                let native = Native::<SkylightPrivate>::new().http(HttpScript::new(
+                    HOST,
+                    "GET",
+                    Response {
+                        status: 200,
+                        headers: vec![],
+                        body: body.clone(),
+                    },
+                ));
+                let started = Instant::now();
+                let output = native.call(capability, input);
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "{capability}: native deadline"
+                );
+                assert_eq!(
+                    native.requests().len(),
+                    1,
+                    "{capability}: exactly one fixed GET"
+                );
+                assert!(
+                    output.stdout.len() < 32 * 1024,
+                    "{capability}: output bound"
+                );
+                assert!(
+                    body.len() + output.stdout.len() < 32 * 1024 * 1024,
+                    "bounded input/output below guest-memory ceiling; native peak is not measured"
+                );
+                if malformed {
+                    assert_eq!(output.status, 1, "{capability}: {}", output.stderr);
+                    assert!(output.stdout.is_empty());
+                    assert_eq!(
+                        output.stderr,
+                        "the private API returned an invalid response\n"
+                    );
+                } else {
+                    assert_eq!(output.status, 0, "{capability}: {}", output.stderr);
+                    let value: Value = serde_json::from_slice(&output.stdout)?;
+                    let records = value[key].as_array().unwrap();
+                    assert_eq!(records.len(), retained);
+                    for (index, record) in records.iter().enumerate() {
+                        assert_eq!(
+                            record["id"],
+                            char::from_u32(0x0800 + index as u32).unwrap().to_string()
+                        );
+                    }
+                    assert_eq!(value["truncated"], true);
+                }
+            }
         }
     }
     Ok(())
