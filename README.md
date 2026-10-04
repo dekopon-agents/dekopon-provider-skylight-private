@@ -431,9 +431,9 @@ list index and populated detail included items were browser-observed. Every test
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. Before core 0.31.0 publishes, the SDK and testkit use a reviewed core Git revision;
-release preparation repins them to exact published crates. The SDK owns the provider world and
-stdio bindings; this repository keeps no WIT mirror.
+1.259.0. The SDK, testkit, and broker crates are pinned to published core 0.33.0.
+The SDK owns the provider world and stdio bindings; this repository keeps no WIT mirror.
+The buffered HTTP import is `dekopon:http/client@1.1.0`; no HTTP 1.2 import is used.
 
 ```console
 cargo fmt --all --check

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-10-04
+
+### Changed
+
+- Repin published Dekopon SDK, testkit, and broker dependencies to 0.33.0; component HTTP import uses 1.1.0 with unchanged buffered private reads.
+
 ## [0.6.0] - 2026-10-03
 
 ### Changed
