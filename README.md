@@ -8,7 +8,7 @@
 
 `skylight-private` is a broker-only Rust component implementing API
 `dekopon.dev/provider/v1alpha1`. Its eight ordered capabilities are independently grantable,
-Medium-risk and read-only. All requests use `https://app.ourskylight.com/api`:
+Medium-risk and read-only. Requests default to `https://app.ourskylight.com/api`:
 
 | Capability | GET route | Small projection |
 |---|---|---|
@@ -23,6 +23,34 @@ Medium-risk and read-only. All requests use `https://app.ourskylight.com/api`:
 
 The legacy manifest description remains `Unsupported private Skylight account and frame reads over
 broker HTTP`. The command word is `skylight`. Original account/frames inputs and outputs are unchanged.
+
+## Owner base URL
+
+The optional owner setting `providerSettings.skylight-private.baseUrl` defaults to
+`https://app.ourskylight.com`:
+
+```yaml
+providerSettings:
+  skylight-private:
+    baseUrl: https://fixture.example.test/skylight
+```
+
+Every route appends `/api/...` to this base, preserving a configured path prefix and encoded
+query values. SDK 0.38.0 validates the base as HTTP or HTTPS with a host and no userinfo, query,
+fragment or whitespace. Malformed settings and unknown keys fail before HTTP. Omitted settings
+or an empty settings object keep the default. Model inputs and CLI flags cannot set an origin.
+
+The broker remains the destination-policy boundary: configure `allowedHosts` and credential
+`destinations` for the chosen authority. A plaintext loopback recorder also requires an explicit
+`allowPlaintextLoopback` grant. Changing the setting grants no network or credential authority.
+
+`tests/cassettes/skylight-private/0001-GET-calendar-events.json` is an **authored synthetic
+cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
+cases. It is not a vendor recording and contains no credentials, cookies, account identifiers,
+or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
+native request seam, and replays the same response through the real component. The component
+harness's host match alone is not used as proof of path/query correctness. Both require no vendor
+access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never silently skips.
 
 ## Command word and strict inputs
 
@@ -431,7 +459,7 @@ list index and populated detail included items were browser-observed. Every test
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. The SDK, testkit, and broker crates are pinned to published core 0.33.0.
+1.259.0. The SDK, testkit, and broker crates are pinned to published core 0.38.0.
 The SDK owns the provider world and stdio bindings; this repository keeps no WIT mirror.
 The buffered HTTP import is `dekopon:http/client@1.1.0`; no HTTP 1.2 import is used.
 
@@ -468,12 +496,11 @@ package, or deployment.
 
 Tests use synthetic response bodies. Native tests run without a socket; real-component tests use
 the testkit's pinned loopback HTTPS origin and broker authorization, never contact Skylight or a
-public host, and assert private response fields never appear on stdout. The provider's fixed
-GET endpoints cannot be overridden by caller input. The current testkit serves HTTPS on an
-ephemeral port and cannot answer for the fixed `app.ourskylight.com:443` authority: successful
-projection is compared with the original native fixtures; real-component conformance, denied
-broker calls and credential-destination refusals cover the component. A real-component positive
-read waits for the authorized post-rollout gallery, not a claim of local coverage. The SDK's typed export uses
+public host, and assert private response fields never appear on stdout. Model inputs cannot override
+the GET origin. Owner settings route positive real-component reads to the testkit's ephemeral HTTPS
+origin; native assertions verify exact joined paths and queries. Real-component conformance, denied
+broker calls and credential-destination refusals remain covered. Live vendor HTTP validation still
+requires separately authorized follow-up. The SDK's typed export uses
 `dekopon:provider@0.4.0` and `dekopon:stdio/streams@0.1.0`, with broker-owned HTTP; no WASI or
 ambient filesystem, environment, clock, random, or socket imports are permitted.
 
@@ -496,6 +523,5 @@ adding ambient authority. This changes only the artifact-size gate: **128,000,00
 32 MiB guest memory, ten seconds, one GET, 4 KiB input/request, 256 KiB response, and
 <32 KiB component output are unchanged**. Native 20,000-record synthetic responses exercise
 bounded projection and malformed tails; real-component broker refusals exercise the configured
-host limits. Positive real-component HTTP at the fixed private authority remains deferred as
-explained above. Minimal records retain lazy boxed attributes/relationships and only the final
+host limits. Positive real-component HTTP uses synthetic loopback fixtures through owner settings. Minimal records retain lazy boxed attributes/relationships and only the final
 selected resources are projected, preserving descending-input resource bounds.
