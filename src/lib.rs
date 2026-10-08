@@ -17,8 +17,9 @@ use std::{fmt, io::Write, marker::PhantomData};
 
 #[cfg(test)]
 use dekopon_provider_sdk::provider;
+use dekopon_provider_sdk::provider::endpoint::Base;
 use dekopon_provider_sdk::provider::{
-    Capability, Code, Failure, Http, Proposal, Provider, Stdout, Usage,
+    Capability, Code, Failure, Http, Proposal, Provider, Settings, Stdout, Usage,
 };
 use dekopon_provider_sdk::provider::{Header, HttpError, Request, Response, method};
 use dekopon_provider_sdk::{EffectKind, RiskLevel};
@@ -41,8 +42,22 @@ const FRAMES_CAPABILITY: &str = "skylight-private.frames.list";
 /// The word an agent's shell types to reach this provider: not reserved by the shell, and free of
 /// the `.`, `-`, and `_` separators that would let it parse as a capability identifier.
 const COMMAND_WORD: &str = "skylight";
-const ACCOUNT_URI: &str = "https://app.ourskylight.com/api/user";
-const FRAMES_URI: &str = "https://app.ourskylight.com/api/frames";
+const DEFAULT_BASE: Base = Base::from_static("https://app.ourskylight.com");
+const ACCOUNT_URI: &str = "/api/user";
+const FRAMES_URI: &str = "/api/frames";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkylightSettings {
+    #[serde(default)]
+    base_url: Option<Base>,
+}
+
+impl SkylightSettings {
+    fn base(self) -> Base {
+        self.base_url.unwrap_or(DEFAULT_BASE)
+    }
+}
 const ACCEPT_JSON: &str = "application/json";
 /// Constant and Dekopon-specific so the guest neither impersonates upstream software nor exposes
 /// input through a header side channel.
@@ -121,12 +136,21 @@ macro_rules! read_capability {
             const EFFECT: EffectKind = EffectKind::ReadOnly;
             const RISK: RiskLevel = RiskLevel::Medium;
             type Input = $input;
-            type Needs = Http;
+            type Needs = (Settings<SkylightSettings>, Http);
             type Error = ProviderError;
 
-            fn run(input: Self::Input, http: Http, out: &mut Stdout) -> Result<(), Self::Error> {
+            fn run(
+                input: Self::Input,
+                (settings, http): Self::Needs,
+                out: &mut Stdout,
+            ) -> Result<(), Self::Error> {
                 let input = serde_json::to_value(input).map_err(|_| invalid_input())?;
-                let uri: String = ($uri)(&input)?;
+                let path: String = ($uri)(&input)?;
+                let uri = settings
+                    .into_inner()
+                    .base()
+                    .join(&path)
+                    .map_err(|_| invalid_request())?;
                 let body = send_once(&uri, |request| http.send(request))?;
                 let output: Value = ($project)(&body)?;
                 write_output(out, &output)
@@ -275,7 +299,12 @@ where
     F: FnOnce(Request) -> Result<Response, HttpError>,
 {
     validate_empty_input(input)?;
-    let body = send_once(ACCOUNT_URI, send)?;
+    let body = send_once(
+        &DEFAULT_BASE
+            .join(ACCOUNT_URI)
+            .map_err(|_| invalid_request())?,
+        send,
+    )?;
     let envelope = decode_account(&body)?;
     validate_id(&envelope.data.0.id)?;
     bounded_output(json!({"account": {"id": envelope.data.0.id}}))
@@ -287,7 +316,12 @@ where
     F: FnOnce(Request) -> Result<Response, HttpError>,
 {
     validate_empty_input(input)?;
-    let body = send_once(FRAMES_URI, send)?;
+    let body = send_once(
+        &DEFAULT_BASE
+            .join(FRAMES_URI)
+            .map_err(|_| invalid_request())?,
+        send,
+    )?;
     let envelope = decode_frames(&body)?;
     project_frames(envelope.data)
 }
@@ -637,10 +671,9 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::{
-        ACCEPT_JSON, ACCOUNT_CAPABILITY, ACCOUNT_URI, FRAMES_CAPABILITY, FRAMES_URI,
-        MAX_COMPONENT_OUTPUT_BYTES, MAX_FRAMES, MAX_ID_BYTES, MAX_NAME_BYTES,
-        MAX_PROJECTED_OUTPUT_BYTES, MAX_RESPONSE_BODY_BYTES, NAME_TRUNCATION_MARKER,
-        SkylightPrivate, USER_AGENT, invoke_with,
+        ACCEPT_JSON, ACCOUNT_CAPABILITY, FRAMES_CAPABILITY, MAX_COMPONENT_OUTPUT_BYTES, MAX_FRAMES,
+        MAX_ID_BYTES, MAX_NAME_BYTES, MAX_PROJECTED_OUTPUT_BYTES, MAX_RESPONSE_BODY_BYTES,
+        NAME_TRUNCATION_MARKER, SkylightPrivate, USER_AGENT, invoke_with,
     };
 
     fn capability(value: &str) -> dekopon_provider_sdk::CapabilityId {
@@ -790,7 +823,7 @@ mod tests {
         let calls = Cell::new(0);
         let output = invoke_with(&capability(ACCOUNT_CAPABILITY), json!({}), |request| {
             calls.set(calls.get() + 1);
-            assert_fixed_request(&request, ACCOUNT_URI);
+            assert_fixed_request(&request, "https://app.ourskylight.com/api/user");
             Ok(json_response(
                 200,
                 json!({
@@ -853,7 +886,7 @@ mod tests {
         let calls = Cell::new(0);
         let output = invoke_with(&capability(FRAMES_CAPABILITY), json!({}), |request| {
             calls.set(calls.get() + 1);
-            assert_fixed_request(&request, FRAMES_URI);
+            assert_fixed_request(&request, "https://app.ourskylight.com/api/frames");
             Ok(json_response(
                 200,
                 json!({

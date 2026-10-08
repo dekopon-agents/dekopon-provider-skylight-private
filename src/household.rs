@@ -330,7 +330,10 @@ impl Read {
     where
         F: FnOnce(Request) -> Result<Response, HttpError>,
     {
-        let body = send_once(&self.uri(&input)?, send)?;
+        let uri = DEFAULT_BASE
+            .join(&self.uri(&input)?)
+            .map_err(|_| invalid_request())?;
+        let body = send_once(&uri, send)?;
         self.project_body(&body)
     }
 

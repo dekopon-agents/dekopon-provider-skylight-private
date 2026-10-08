@@ -2,7 +2,7 @@
 
 [package]
 name = "dekopon-skylight-private-provider"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.98.1"
 description = "Unsupported private Skylight account and frame reads over broker HTTP"
@@ -15,16 +15,17 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 clap = { version = "=4.6.6", features = ["derive"] }
-dekopon-provider-sdk = { version = "=0.33.0" }
+dekopon-provider-sdk = { version = "=0.38.0" }
 schemars = "=1.2.2"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 
 [dev-dependencies]
-dekopon-provider-sdk-testkit = { version = "=0.33.0" }
-dekopon-broker-host = { version = "=0.33.0" }
-dekopon-capability = { version = "=0.33.0" }
-dekopon-core = { version = "=0.33.0" }
+dekopon-provider-sdk-testkit = { version = "=0.38.0" }
+dekopon-broker-host = { version = "=0.38.0" }
+dekopon-http-host = { version = "=0.38.0" }
+dekopon-capability = { version = "=0.38.0" }
+dekopon-core = { version = "=0.38.0" }
 tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread"] }
 
 # The generated wit-bindgen export shims expand at crate scope. Denying unsafe code here would

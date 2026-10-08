@@ -190,7 +190,6 @@ fn real_account_matches_native_and_excludes_private_response_fields() -> TestRes
             .any(|h| h.name.eq_ignore_ascii_case("authorization")
                 || h.name.eq_ignore_ascii_case("cookie"))
     );
-    // Fixed :443 is not the testkit's ephemeral HTTPS port. No real component success is claimed.
     let stdout = String::from_utf8(expected.stdout)?;
     assert_eq!(
         serde_json::from_str::<Value>(&stdout)?,
@@ -254,31 +253,49 @@ fn all_eight_reads_retain_bounded_native_projections() -> TestResult {
             "tasks",
         ),
     ] {
-        let fixture = HttpScript::new(HOST, "GET", response(body));
-        let native = Native::<SkylightPrivate>::new().http(fixture);
-        let output = native.call(capability, &input.to_string());
-        assert_eq!(output.status, 0, "{capability}: {}", output.stderr);
-        let requests = native.requests();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].uri, format!("https://{HOST}{expected_path}"));
-        assert_eq!(requests[0].method, "GET");
-        assert!(requests[0].body.is_empty());
-        assert!(
-            requests[0]
-                .headers
-                .iter()
-                .all(|header| !matches!(header.name.as_str(), "authorization" | "cookie"))
-        );
-        let value: Value = serde_json::from_slice(&output.stdout)?;
-        assert!(value.get(output_key).is_some(), "{capability}: {value}");
-        if capability == FRAMES {
-            assert_eq!(
-                value["frames"],
-                json!([{"id":"frame-a","nameTruncated":false},{"id":"frame-b","name":"Room","nameTruncated":false}])
+        for (host, base, settings) in [
+            (HOST, "https://app.ourskylight.com", None),
+            (HOST, "https://app.ourskylight.com", Some(json!({}))),
+            (
+                "fixture.example.test",
+                "https://fixture.example.test/skylight",
+                Some(json!({"baseUrl":"https://fixture.example.test/skylight/"})),
+            ),
+        ] {
+            let fixture = HttpScript::new(host, "GET", response(body.clone()));
+            let mut native = Native::<SkylightPrivate>::new().http(fixture);
+            if let Some(settings) = settings {
+                native = native.settings(settings);
+            }
+            let output = native.call(capability, &input.to_string());
+            assert_eq!(output.status, 0, "{capability}: {}", output.stderr);
+            let requests = native.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].uri, format!("{base}{expected_path}"));
+            assert_eq!(requests[0].method, "GET");
+            assert!(requests[0].body.is_empty());
+            assert!(
+                requests[0].headers.iter().any(
+                    |h| h.name.eq_ignore_ascii_case("accept") && h.value == b"application/json"
+                )
             );
-        } else {
-            assert_eq!(value["coverage"], "bounded-response");
-            assert_eq!(value["upstreamCompleteness"], "unknown");
+            assert!(
+                requests[0]
+                    .headers
+                    .iter()
+                    .all(|header| !matches!(header.name.as_str(), "authorization" | "cookie"))
+            );
+            let value: Value = serde_json::from_slice(&output.stdout)?;
+            assert!(value.get(output_key).is_some(), "{capability}: {value}");
+            if capability == FRAMES {
+                assert_eq!(
+                    value["frames"],
+                    json!([{"id":"frame-a","nameTruncated":false},{"id":"frame-b","name":"Room","nameTruncated":false}])
+                );
+            } else {
+                assert_eq!(value["coverage"], "bounded-response");
+                assert_eq!(value["upstreamCompleteness"], "unknown");
+            }
         }
     }
     Ok(())
@@ -466,4 +483,110 @@ fn host_does_not_reflect_http_failures_or_private_data() {
     assert_ne!(result.status, 0);
     assert!(result.stdout.is_empty());
     assert!(!result.stderr.contains("private-credential-sentinel"));
+}
+
+#[test]
+fn owner_settings_fail_closed_for_every_read() {
+    for (capability, input) in [
+        (ACCOUNT, json!({})),
+        (FRAMES, json!({})),
+        (CATEGORIES, json!({"frameId":"frame-test"})),
+        (
+            "skylight-private.calendar.events.list",
+            json!({"frameId":"frame-test","dateMin":"2028-03-11","dateMax":"2028-03-13","timezone":"America/New_York"}),
+        ),
+        (
+            "skylight-private.lists.list",
+            json!({"frameId":"frame-test"}),
+        ),
+        (
+            "skylight-private.lists.read",
+            json!({"frameId":"frame-test","listId":"list-test"}),
+        ),
+        (
+            "skylight-private.list.items.list",
+            json!({"frameId":"frame-test","listId":"list-test"}),
+        ),
+        (
+            "skylight-private.tasks.list",
+            json!({"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11"}),
+        ),
+    ] {
+        for settings in [
+            json!({"baseUrl":"https://fixture.example.test?query=1"}),
+            json!({"baseUrl":"https://user@fixture.example.test"}),
+            json!({"baseUrl":"https://fixture.example.test#fragment"}),
+            json!({"baseUrl":"ftp://fixture.example.test"}),
+            json!({"baseUrl":"fixture.example.test"}),
+            json!({"baseUrl":42}),
+            json!({"endpoint":"https://fixture.example.test"}),
+        ] {
+            let native = Native::<SkylightPrivate>::new().settings(settings);
+            let result = native.call(capability, &input.to_string());
+            assert_ne!(result.status, 0, "{capability}");
+            assert!(result.stderr.contains("settings"), "{}", result.stderr);
+            assert!(result.stdout.is_empty());
+            assert!(native.requests().is_empty());
+        }
+        for field in ["endpoint", "url", "baseUrl"] {
+            let mut controlled = input.clone();
+            controlled[field] = json!("https://fixture.example.test");
+            let native = Native::<SkylightPrivate>::new();
+            let result = native.call(capability, &controlled.to_string());
+            assert_ne!(result.status, 0);
+            assert!(native.requests().is_empty());
+        }
+    }
+    let manifest = provider::manifest::<SkylightPrivate>().unwrap();
+    for capability in manifest.capabilities {
+        let properties = &capability.input_schema["properties"];
+        for field in ["endpoint", "url", "baseUrl", "host"] {
+            assert!(properties.get(field).is_none());
+        }
+    }
+}
+
+#[test]
+fn real_component_reaches_owner_base_and_rejects_invalid_settings() -> TestResult {
+    let harness = Harness::<SkylightPrivate>::get(component()).http(HttpScript::new(
+        "localhost",
+        "GET",
+        response(account_fixture()),
+    ));
+    let origin = harness.origin().unwrap().to_owned();
+    let result = harness
+        .settings(json!({"baseUrl":format!("{origin}/skylight")}))
+        .call(ACCOUNT, json!({}))?;
+    assert_eq!(result.status, 0, "{}", result.stderr);
+    assert_eq!(result.http_calls.len(), 1);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&result.stdout)?,
+        json!({"account":{"id":"account-synthetic"}})
+    );
+    let native = Native::<SkylightPrivate>::new()
+        .settings(json!({"baseUrl":"https://fixture.example.test/skylight/"}))
+        .http(HttpScript::new(
+            "fixture.example.test",
+            "GET",
+            response(account_fixture()),
+        ));
+    let result = native.call(ACCOUNT, "{}");
+    assert_eq!(result.status, 0);
+    assert_eq!(native.requests().len(), 1);
+    assert_eq!(
+        native.requests()[0].uri,
+        "https://fixture.example.test/skylight/api/user"
+    );
+    for settings in [
+        json!({"baseUrl":"https://user@localhost"}),
+        json!({"url":"https://localhost"}),
+    ] {
+        let result = Harness::<SkylightPrivate>::get(component())
+            .settings(settings)
+            .call(ACCOUNT, json!({}))?;
+        assert_ne!(result.status, 0);
+        assert!(result.stderr.contains("settings"));
+        assert!(result.http_calls.is_empty());
+    }
+    Ok(())
 }

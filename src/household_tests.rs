@@ -16,7 +16,10 @@ fn invoke(read: Read, body: Value) -> Result<Value, ProviderError> {
 }
 fn invoke_raw(read: Read, body: &str) -> Result<Value, ProviderError> {
     read.invoke(input(read), |request| {
-        super::tests::assert_fixed_request(&request, &read.uri(&input(read)).unwrap());
+        super::tests::assert_fixed_request(
+            &request,
+            &DEFAULT_BASE.join(&read.uri(&input(read)).unwrap()).unwrap(),
+        );
         Ok(Response {
             status: 200,
             headers: vec![],

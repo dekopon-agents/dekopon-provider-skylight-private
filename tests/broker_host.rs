@@ -2,13 +2,15 @@
 use std::{path::PathBuf, time::Duration};
 
 use dekopon_broker_host::{
-    BoundCredential, BrokerHostError, BrokerHostLimits, BrokerProviderRegistry, asset::AssetInputs,
+    BoundCredential, BrokerHostError, BrokerHostLimits, BrokerProviderRegistry, TestImports,
+    asset::AssetInputs,
 };
 use dekopon_capability::{
     AuthorizedInvocation, ExecutionConstraints, HttpConstraints, ProposedInvocation,
     broker::AuthorizationGate,
 };
 use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, Redacted, TraceId};
+use dekopon_http_host::LoopbackHttpsPin;
 use serde_json::{Value, json};
 
 fn limits() -> BrokerHostLimits {
@@ -181,21 +183,43 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
             vec!["not-skylight.invalid".to_owned()],
         )
         .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let authority = format!("fixture.example.test:{}", address.port());
+        let imports = TestImports {
+            loopback_https_pin: Some(
+                LoopbackHttpsPin::new(&authority, address, b"synthetic-unused-trust-root".to_vec())
+                    .unwrap(),
+            ),
+            settings: Some(json!({"baseUrl":format!("https://{authority}/skylight")}).to_string()),
+            ..TestImports::default()
+        };
         let failure = registry
-            .invoke(
-                authorized(capability, input, grant("app.ourskylight.com", "GET", 4096)),
+            .invoke_with_test_imports(
+                authorized(capability, input, grant(&authority, "GET", 4096)),
                 Some(credential),
+                None,
                 AssetInputs::default(),
+                Some(&imports),
             )
             .await
             .unwrap_err();
-        assert!(matches!(
-            failure.error.as_ref(),
-            BrokerHostError::HostCallRejected {
-                reason: "denied",
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                failure.error.as_ref(),
+                BrokerHostError::HostCallRejected {
+                    reason: "denied",
+                    ..
+                }
+            ),
+            "{capability}: {:?}",
+            failure.error
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert_eq!(failure.http_calls.len(), 1);
         assert!(!failure.http_calls[0].credential_injected);
         assert_eq!(failure.http_calls[0].status, None);
