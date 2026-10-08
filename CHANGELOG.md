@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-10-08
+
+### Added
+
+- Add validated owner `providerSettings.skylight-private.baseUrl` routing with unchanged default routes and synthetic cassette replay coverage.
+
+### Changed
+
+- Repin published Dekopon SDK, testkit, and broker test dependencies to 0.38.0.
+
 ## [0.7.0] - 2026-10-04
 
 ### Changed

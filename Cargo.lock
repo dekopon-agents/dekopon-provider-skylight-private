@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "dekopon-skylight-private-provider"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "clap",
  "dekopon-broker-host",
