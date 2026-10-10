@@ -49,14 +49,12 @@ const FRAMES_URI: &str = "/api/frames";
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SkylightSettings {
-    #[serde(default)]
-    base_url: Option<Base>,
+    #[serde(default = "default_base")]
+    base_url: Base,
 }
 
-impl SkylightSettings {
-    fn base(self) -> Base {
-        self.base_url.unwrap_or(DEFAULT_BASE)
-    }
+fn default_base() -> Base {
+    DEFAULT_BASE
 }
 const ACCEPT_JSON: &str = "application/json";
 /// Constant and Dekopon-specific so the guest neither impersonates upstream software nor exposes
@@ -148,7 +146,7 @@ macro_rules! read_capability {
                 let path: String = ($uri)(&input)?;
                 let uri = settings
                     .into_inner()
-                    .base()
+                    .base_url
                     .join(&path)
                     .map_err(|_| invalid_request())?;
                 let body = send_once(&uri, |request| http.send(request))?;

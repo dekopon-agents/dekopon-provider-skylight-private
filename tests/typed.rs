@@ -547,6 +547,17 @@ fn owner_settings_fail_closed_for_every_read() {
 }
 
 #[test]
+fn a_null_base_url_is_invalid_settings() -> TestResult {
+    let result = Harness::<SkylightPrivate>::get(component())
+        .settings(json!({"baseUrl":null}))
+        .call(ACCOUNT, json!({}))?;
+    assert_ne!(result.status, 0);
+    assert!(result.stderr.contains("settings"));
+    assert!(result.http_calls.is_empty());
+    Ok(())
+}
+
+#[test]
 fn real_component_reaches_owner_base_and_rejects_invalid_settings() -> TestResult {
     let harness = Harness::<SkylightPrivate>::get(component()).http(HttpScript::new(
         "localhost",
