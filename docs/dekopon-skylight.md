@@ -107,8 +107,8 @@ Bind only the capabilities you grant. A non-default
 
 ### 3. Constraint sets
 
-Drop the legacy `credential:` line and give each capability a `defaultSecretUse`. Keep the
-constraints from the README unchanged.
+Start from the README's `capabilities:` example, drop its provider-level `credential:` line, and give
+each capability a `defaultSecretUse` in place of `{}`. The constraints stay the same.
 
 ```yaml
 capabilities:
@@ -156,24 +156,20 @@ record stays sealed), when reads keep failing with a broker failure, or when a l
 keep returning `reauth-required`:
 
 1. Capture a fresh refresh token. Do not log out of the session it came from; abandon it.
-2. Write it to key `refresh-seed` of Secret `dekopon-skylight-seed` through whatever manages that
-   Secret (an External Secrets source, or directly from a file so the value never reaches shell
-   history):
-
-   ```sh
-   kubectl -n <namespace> create secret generic dekopon-skylight-seed \
-     --from-file=refresh-seed=<seed-file> --dry-run=client -o yaml | kubectl apply -f -
-   ```
-
+2. Change the value of key `refresh-seed` at the Secret's source (for External Secrets, the
+   field in the backing store). A hand-written value in a Secret a controller owns is reverted, and
+   the reverted, spent seed is adopted at the next rollout and seals the family.
 3. Let Reloader roll the pod, or roll it yourself. The chart copies the seed only at pod start.
-4. Make one read-only call such as `skylight account`. The scheduler skips sealed and missing
-   records, so that use is what adopts the seed: the broker sees a changed digest and exchanges it
-   under the record lock, in Live or Sealed state, abandoning the old family, and saves the rotation
-   before serving any access token. An unchanged seed never unseals or overwrites a rotation.
-5. Confirm the call answered and its `broker.credential.refresh` span reads `outcome = refreshed`.
-   Scheduled rotation takes over from there.
+4. After the roll, a `scheduled` source exchanges the changed seed on the broker's first tick
+   (`broker.credential.refresh` with `trigger = scheduled`, `outcome = refreshed`); a `lazy` source
+   does it on first use. Either way the broker exchanges it under the record lock, in Live or Sealed
+   state, abandoning the old family, and saves the rotation before serving any access token. An
+   unchanged seed never unseals or overwrites a rotation. Then make one read-only call such as
+   `skylight account`.
+5. With `scheduled`, that call's use span reads `outcome = not-due`; with `lazy`, it reads
+   `refreshed`.
 
-Delete the seed file from wherever you staged it.
+Delete any local copy of the seed.
 
 A failed save after a rotation has a named cost: after a restart the broker may present the spent
 predecessor, Skylight answers with a reused-token code, and the record seals. The recovery is this
@@ -185,4 +181,5 @@ same reconnect.
 DRN and keeps serving everything else. Delete the record and provide a new seed. The broker image is
 distroless, so follow core's
 [maintenance-pod procedure](https://github.com/dekopon-agents/dekopon/blob/v0.48.0/docs/secrets.md#oauth2refresh)
-with the broker scaled to zero.
+with the broker scaled to zero, but have the pod run `rm /record/skylight.json` instead of writing a
+record from stdin.
