@@ -213,46 +213,36 @@ Failures redact URI, status detail, headers, body, credentials and transport/par
 ## Required broker-only authority
 
 A deployment must explicitly opt in to **each desired capability** with an owner-authored constraint
-set. The examples below preserve the original grants; use exactly the same limits for each new
-capability ID in the table above, granting only those needed. Neither manifest imports nor this
-repository grant authority. No capability implicitly grants any other. The native host follows no redirects. Do not relax the exact
-host, method, one-request maximum, HTTPS-only posture, ten-second deadline, or byte ceilings.
+set. List only the capability IDs you need under `capabilities`; an unlisted capability does not
+run, and `{}` inherits the provider-level limits. Neither manifest imports nor this repository grant
+authority. No capability implicitly grants any other. The native host follows no redirects. Do not
+relax the exact host, method, one-request maximum, HTTPS-only posture, ten-second deadline, or byte
+ceilings.
 
 ```yaml
-constraintSets:
-  skylight-private.account.read:
-    provider: skylight-private
-    effect: read-only
-    risk: Medium
-    credential: skylight-poc-bearer
+capabilities:
+  skylight-private:
+    credential: skylight-private-bearer
     constraints:
       timeoutMs: 10000
-      maxOutputBytes: 32768
       http:
         allowedHosts: [app.ourskylight.com]
         allowedMethods: [GET]
         maxRequests: 1
         maxRequestBytes: 4096
         maxResponseBytes: 262144
-        allowPlaintextLoopback: false
-  skylight-private.frames.list:
-    provider: skylight-private
-    effect: read-only
-    risk: Medium
-    credential: skylight-poc-bearer
-    constraints:
-      timeoutMs: 10000
-      maxOutputBytes: 32768
-      http:
-        allowedHosts: [app.ourskylight.com]
-        allowedMethods: [GET]
-        maxRequests: 1
-        maxRequestBytes: 4096
-        maxResponseBytes: 262144
-        allowPlaintextLoopback: false
+    capabilities:
+      skylight-private.account.read: {}
+      skylight-private.frames.list: {}
+      skylight-private.categories.list: {}
+      skylight-private.calendar.events.list: {}
+      skylight-private.lists.list: {}
+      skylight-private.lists.read: {}
+      skylight-private.list.items.list: {}
+      skylight-private.tasks.list: {}
 ```
 
-The `credential:` example above is the legacy static path: the operator installs a short-lived
+The provider-level `credential:` above is the legacy static path: the operator installs a short-lived
 access token out of band in the owner-only broker credential store, bound to exactly
 `app.ourskylight.com`, and replaces it by hand when it expires.
 
