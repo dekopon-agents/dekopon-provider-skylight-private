@@ -252,16 +252,25 @@ constraintSets:
         allowPlaintextLoopback: false
 ```
 
-The operator must obtain a disposable, short-lived access token out of band, only where authorized,
-and install it solely in the owner-only broker credential store. Use a non-PII symbolic name and
-bind it to exactly `app.ourskylight.com`. The broker validates the request before injecting
-`Authorization: Bearer …` where the guest cannot observe it. Credential values must never enter
-source, fixtures, inputs, outputs, errors, logs, traces, evidence, audit, or names.
+The `credential:` example above is the legacy static path: the operator installs a short-lived
+access token out of band in the owner-only broker credential store, bound to exactly
+`app.ourskylight.com`, and replaces it by hand when it expires.
 
-The credential store is static and loaded at startup. Replacement can require a broker restart.
-This component implements no OAuth, login, PKCE, callback, MFA/CAPTCHA handling, refresh, token
-cache, rotation, revocation, expiry persistence, enrollment, or pre-expiry renewal. One bearer may
-expose multiple accounts or frames; the upstream bearer remains the final resource boundary.
+The broker can instead keep the token alive itself. With core `dekopon-brokerd` v0.48.0 and chart
+0.35.0, an owner-authored `oauth2Refresh` secret-map DRN with `refresh: scheduled` and a
+broker-private `seedPath`, plus `defaultSecretUse` on each constraint set in place of `credential:`,
+gives the broker the refresh, idle rotation, seed adoption and sealing.
+[`docs/dekopon-skylight.md`](docs/dekopon-skylight.md) has that configuration and the owner's
+reconnect procedure. The same provider artifact serves both paths; neither needs a provider setting
+or release.
+
+Either way the broker validates the request before injecting `Authorization: Bearer …` where the
+guest cannot observe it. This component itself still implements no OAuth, login, PKCE, callback,
+MFA/CAPTCHA handling, refresh, token cache, rotation, revocation, expiry persistence, enrollment, or
+pre-expiry renewal; it maps an upstream 401 to `reauth-required` and nothing more. Credential values
+must never enter source, fixtures, inputs, outputs, errors, logs, traces, evidence, audit, or names.
+One bearer may expose multiple accounts or frames; the upstream bearer remains the final resource
+boundary.
 
 Never add this provider to default catalogs, images, policies, credentials, packages, or
 deployments.
