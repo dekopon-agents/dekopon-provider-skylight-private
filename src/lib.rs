@@ -57,7 +57,8 @@ fn default_base() -> Base {
     DEFAULT_BASE
 }
 const ACCEPT_JSON: &str = "application/json";
-// Skylight answers 422 to chores reads with `include_up_for_grabs=true` without this version.
+// Skylight answers 422 to chores reads with `include_up_for_grabs=true` without this version:
+// https://github.com/chrischall/skylight-mcp/blob/main/docs/MOBILE_API_FINDINGS.md
 const SKYLIGHT_API_VERSION: &str = "2026-05-01";
 /// Constant and Dekopon-specific so the guest neither impersonates upstream software nor exposes
 /// input through a header side channel.
