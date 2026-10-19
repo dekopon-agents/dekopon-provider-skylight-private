@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-10-19
+
+### Changed
+
+- Document the broker-refreshed oauth2Refresh DRN path for Skylight and fix the README constraint example to the capabilities schema.
+
+### Fixed
+
+- Chores reads with `include_up_for_grabs` no longer fail with 422; every request sends `skylight-api-version: 2026-05-01`.
+- Reject a null Skylight `baseUrl` as invalid settings instead of falling back to the default.
+
 ## [0.8.0] - 2026-10-08
 
 ### Added
