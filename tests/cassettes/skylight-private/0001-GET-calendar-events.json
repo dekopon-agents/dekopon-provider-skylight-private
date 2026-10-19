@@ -4,7 +4,7 @@
     "method": "GET",
     "path": "/api/frames/frame-test/calendar_events",
     "query": "date_min=2028-03-11&date_max=2028-03-13&timezone=Etc%2FGMT%2B5&include=categories%2Ccalendar_account%2Cevent_notification_setting",
-    "headers": {"accept": "application/json"},
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01"},
     "body": null
   },
   "response": {

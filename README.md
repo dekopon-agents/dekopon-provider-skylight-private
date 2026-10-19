@@ -158,9 +158,11 @@ guest headers. It never retries or follows pagination; the native broker follows
 ```text
 accept: application/json
 user-agent: dekopon-skylight-private-provider/0.1 (+https://github.com/dekopon-agents/dekopon)
+skylight-api-version: 2026-05-01
 ```
 
-The legacy user-agent is intentionally retained. The guest never sets `authorization`, `cookie`, or
+The legacy user-agent is intentionally retained. Skylight serves `include_up_for_grabs=true` chores
+only to requests that name this API version. The guest never sets `authorization`, `cookie`, or
 `content-type`. Only the broker injects the destination-bound bearer. Only status 200 is decoded;
 response headers/content type are ignored and response bodies are capped at 262,144 bytes.
 

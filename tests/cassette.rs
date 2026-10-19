@@ -43,15 +43,14 @@ fn authored_household_cassette_replays_with_exact_prefix_and_query()
         )
     );
     assert!(sent[0].body.is_empty());
-    let accept = sent[0]
-        .headers
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("accept"))
-        .unwrap();
-    assert_eq!(
-        accept.value,
-        request["headers"]["accept"].as_str().unwrap().as_bytes()
-    );
+    for (name, value) in request["headers"].as_object().unwrap() {
+        let sent_header = sent[0]
+            .headers
+            .iter()
+            .find(|h| h.name.eq_ignore_ascii_case(name))
+            .unwrap();
+        assert_eq!(sent_header.value, value.as_str().unwrap().as_bytes());
+    }
     assert!(
         !sent[0]
             .headers

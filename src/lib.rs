@@ -57,6 +57,9 @@ fn default_base() -> Base {
     DEFAULT_BASE
 }
 const ACCEPT_JSON: &str = "application/json";
+// Skylight answers 422 to chores reads with `include_up_for_grabs=true` without this version:
+// https://github.com/chrischall/skylight-mcp/blob/main/docs/MOBILE_API_FINDINGS.md
+const SKYLIGHT_API_VERSION: &str = "2026-05-01";
 /// Constant and Dekopon-specific so the guest neither impersonates upstream software nor exposes
 /// input through a header side channel.
 const USER_AGENT: &str =
@@ -342,7 +345,8 @@ where
     let request = Request::new(method::GET, uri)
         .map_err(|_| invalid_request())?
         .with_header(header("accept", ACCEPT_JSON)?)
-        .with_header(header("user-agent", USER_AGENT)?);
+        .with_header(header("user-agent", USER_AGENT)?)
+        .with_header(header("skylight-api-version", SKYLIGHT_API_VERSION)?);
     let response = send(request).map_err(|_| http_failed())?;
     if response.status != 200 {
         return Err(status_error(response.status));
@@ -671,7 +675,7 @@ mod tests {
     use super::{
         ACCEPT_JSON, ACCOUNT_CAPABILITY, FRAMES_CAPABILITY, MAX_COMPONENT_OUTPUT_BYTES, MAX_FRAMES,
         MAX_ID_BYTES, MAX_NAME_BYTES, MAX_PROJECTED_OUTPUT_BYTES, MAX_RESPONSE_BODY_BYTES,
-        NAME_TRUNCATION_MARKER, SkylightPrivate, USER_AGENT, invoke_with,
+        NAME_TRUNCATION_MARKER, SKYLIGHT_API_VERSION, SkylightPrivate, USER_AGENT, invoke_with,
     };
 
     fn capability(value: &str) -> dekopon_provider_sdk::CapabilityId {
@@ -703,6 +707,8 @@ mod tests {
             vec![
                 Header::text("accept", ACCEPT_JSON).expect("fixed accept header"),
                 Header::text("user-agent", USER_AGENT).expect("fixed user-agent header"),
+                Header::text("skylight-api-version", SKYLIGHT_API_VERSION)
+                    .expect("fixed api-version header"),
             ]
         );
         for denied in ["authorization", "cookie", "content-type"] {
