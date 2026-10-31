@@ -103,6 +103,10 @@ Every binding uses `sink: httpBearer`, `allowedHosts: [app.ourskylight.com]`,
 | `skylight-list-items-list` | `skylight-private.list.items.list` | `segmentPrefix /api/frames` | no |
 | `skylight-tasks-list` | `skylight-private.tasks.list` | `segmentPrefix /api/frames` | yes |
 
+No write is bound. A future `skylight-private.categories.delete` binding that permits
+`--reassign-to` needs `allowQuery: yes`: that write then sends `?reassign_to_id=…`, and the broker
+refuses to inject the bearer on a URL with a query unless the binding allows one.
+
 Bind only the capabilities you grant. A non-default
 [`baseUrl`](../README.md#owner-base-url) host has no binding here and is denied.
 

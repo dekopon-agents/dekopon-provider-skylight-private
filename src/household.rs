@@ -892,7 +892,6 @@ impl CategoryDeleteInput {
     }
 }
 
-/// The fixed category body, in pyskylight's field order.
 #[derive(Default, Serialize)]
 struct CategoryBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
