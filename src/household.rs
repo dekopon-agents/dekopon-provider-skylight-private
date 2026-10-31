@@ -794,6 +794,113 @@ impl ListUpdateInput {
     }
 }
 
+// Category writes: INVENTORY rows 44-47. Create and find-or-create both require a label and a
+// color (pyskylight `cli.py:748-761`); delete may name one category to reassign items to.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CategoryInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    label: String,
+    #[schemars(length(min = 1, max = 32), regex(pattern = "^[A-Za-z0-9#_-]+$"))]
+    color: String,
+}
+impl CategoryInput {
+    pub(crate) fn new(frame_id: String, label: String, color: String) -> Self {
+        Self {
+            frame_id,
+            label,
+            color,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 3))]
+pub struct CategoryUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    category_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    label: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 32),
+        regex(pattern = "^[A-Za-z0-9#_-]+$")
+    )]
+    color: Option<String>,
+}
+impl CategoryUpdateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        category_id: String,
+        label: Option<String>,
+        color: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            category_id,
+            label,
+            color,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CategoryDeleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    category_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    reassign_to_id: Option<String>,
+}
+impl CategoryDeleteInput {
+    pub(crate) fn new(
+        frame_id: String,
+        category_id: String,
+        reassign_to_id: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            category_id,
+            reassign_to_id,
+        }
+    }
+}
+
+/// The fixed category body, in pyskylight's field order.
+#[derive(Default, Serialize)]
+struct CategoryBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<&'a str>,
+}
+
 /// The fixed list body, in pyskylight's field order.
 #[derive(Default, Serialize)]
 struct ListBody<'a> {
@@ -832,10 +939,14 @@ pub(crate) enum Mutation {
     ListCreate,
     ListUpdate,
     ListDelete,
+    CategoryCreate,
+    CategoryFindOrCreate,
+    CategoryUpdate,
+    CategoryDelete,
 }
 
 #[cfg(test)]
-pub(crate) const WRITES: [Mutation; 10] = [
+pub(crate) const WRITES: [Mutation; 14] = [
     Mutation::EventCreate,
     Mutation::EventUpdate,
     Mutation::EventDelete,
@@ -846,6 +957,10 @@ pub(crate) const WRITES: [Mutation; 10] = [
     Mutation::ListCreate,
     Mutation::ListUpdate,
     Mutation::ListDelete,
+    Mutation::CategoryCreate,
+    Mutation::CategoryFindOrCreate,
+    Mutation::CategoryUpdate,
+    Mutation::CategoryDelete,
 ];
 
 impl Mutation {
@@ -862,6 +977,10 @@ impl Mutation {
             Self::ListCreate => "skylight-private.lists.create",
             Self::ListUpdate => "skylight-private.lists.update",
             Self::ListDelete => "skylight-private.lists.delete",
+            Self::CategoryCreate => "skylight-private.categories.create",
+            Self::CategoryFindOrCreate => "skylight-private.categories.find-or-create",
+            Self::CategoryUpdate => "skylight-private.categories.update",
+            Self::CategoryDelete => "skylight-private.categories.delete",
         }
     }
 
@@ -873,11 +992,18 @@ impl Mutation {
     #[cfg(test)]
     pub(crate) fn method(self) -> &'static str {
         match self {
-            Self::EventCreate | Self::ItemCreate | Self::ListCreate => method::POST,
+            Self::EventCreate
+            | Self::ItemCreate
+            | Self::ListCreate
+            | Self::CategoryCreate
+            | Self::CategoryFindOrCreate => method::POST,
+            Self::CategoryUpdate => method::PATCH,
             Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete | Self::ListUpdate => {
                 method::PUT
             }
-            Self::EventDelete | Self::ItemDelete | Self::ListDelete => method::DELETE,
+            Self::EventDelete | Self::ItemDelete | Self::ListDelete | Self::CategoryDelete => {
+                method::DELETE
+            }
         }
     }
 
@@ -910,6 +1036,11 @@ impl Mutation {
             Self::ListCreate => (&["frameId", "label"], &["color", "kind"]),
             Self::ListUpdate => (&["frameId", "listId"], &["label", "color", "kind"]),
             Self::ListDelete => (&["frameId", "listId"], &[]),
+            Self::CategoryCreate | Self::CategoryFindOrCreate => {
+                (&["frameId", "label", "color"], &[])
+            }
+            Self::CategoryUpdate => (&["frameId", "categoryId"], &["label", "color"]),
+            Self::CategoryDelete => (&["frameId", "categoryId"], &["reassignToId"]),
         }
     }
 
@@ -924,7 +1055,7 @@ impl Mutation {
             || required.iter().any(|key| !object.contains_key(*key))
             || (matches!(
                 self,
-                Self::EventUpdate | Self::ItemUpdate | Self::ListUpdate
+                Self::EventUpdate | Self::ItemUpdate | Self::ListUpdate | Self::CategoryUpdate
             ) && !optional.iter().any(|key| object.contains_key(*key)))
         {
             return Err(invalid_household_input());
@@ -944,6 +1075,33 @@ impl Mutation {
             value => Ok(value),
         };
         let frame = selector("frameId")?;
+        if let Self::CategoryCreate
+        | Self::CategoryFindOrCreate
+        | Self::CategoryUpdate
+        | Self::CategoryDelete = self
+        {
+            let base = format!("{FRAMES_URI}/{frame}/categories");
+            let path = match self {
+                Self::CategoryCreate => base,
+                Self::CategoryFindOrCreate => format!("{base}/find_or_create"),
+                _ => format!("{base}/{}", selector("categoryId")?),
+            };
+            if self == Self::CategoryDelete {
+                // The only query any write sends: a selector, so it needs no encoding.
+                return Ok(match text("reassignToId")? {
+                    None => (path, None),
+                    Some(target) => {
+                        safe_segment(target)?;
+                        (format!("{path}?reassign_to_id={target}"), None)
+                    }
+                });
+            }
+            let body = CategoryBody {
+                label: checked("label", valid_summary)?,
+                color: checked("color", valid_color)?,
+            };
+            return Ok((path, Some(encode(&body)?)));
+        }
         if let Self::ListCreate | Self::ListUpdate | Self::ListDelete = self {
             let base = format!("{FRAMES_URI}/{frame}/lists");
             let path = match self {
@@ -1093,6 +1251,10 @@ impl Mutation {
             Self::ListCreate | Self::ListUpdate | Self::ListDelete => {
                 project(body, "list", true, ProjectionKind::List)
             }
+            Self::CategoryCreate
+            | Self::CategoryFindOrCreate
+            | Self::CategoryUpdate
+            | Self::CategoryDelete => project(body, "category", true, ProjectionKind::Category),
         };
         Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }

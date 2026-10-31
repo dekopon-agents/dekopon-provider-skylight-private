@@ -100,6 +100,10 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
         include_str!("cassettes/skylight-private/0009-POST-lists.json"),
         include_str!("cassettes/skylight-private/0010-PUT-list.json"),
         include_str!("cassettes/skylight-private/0011-DELETE-list.json"),
+        include_str!("cassettes/skylight-private/0016-POST-categories.json"),
+        include_str!("cassettes/skylight-private/0017-POST-categories-find-or-create.json"),
+        include_str!("cassettes/skylight-private/0018-PATCH-category.json"),
+        include_str!("cassettes/skylight-private/0019-DELETE-category.json"),
     ] {
         let exchange: Value = serde_json::from_str(raw)?;
         assert_eq!(exchange["version"], 1);
@@ -139,9 +143,12 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
         let sent = native.requests();
         assert_eq!(sent.len(), 1, "{capability}");
         assert_eq!(sent[0].method, method);
+        let query = request["query"]
+            .as_str()
+            .map_or(String::new(), |query| format!("?{query}"));
         assert_eq!(
             sent[0].uri,
-            format!("{base}{}", request["path"].as_str().unwrap())
+            format!("{base}{}{query}", request["path"].as_str().unwrap())
         );
         match &request["body"] {
             Value::Null => assert!(sent[0].body.is_empty(), "{capability}"),
@@ -176,6 +183,10 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
                 assert_eq!(projected["event"]["id"], record["id"]);
                 assert_eq!(projected["event"]["summary"], attributes["summary"]);
                 assert_eq!(projected["event"]["startsAt"], attributes["starts_at"]);
+            } else if capability.contains(".categories.") {
+                assert_eq!(projected["category"]["id"], record["id"]);
+                assert_eq!(projected["category"]["label"], attributes["label"]);
+                assert_eq!(projected["category"]["color"], attributes["color"]);
             } else if capability.contains(".lists.") {
                 assert_eq!(projected["list"]["id"], record["id"]);
                 assert_eq!(projected["list"]["label"], attributes["label"]);
