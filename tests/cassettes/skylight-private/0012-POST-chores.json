@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B4 task (chore) writes, never recorded against Skylight",
+  "capability": "skylight-private.tasks.create",
+  "input": {"frameId": "frame-test", "summary": "Synthetic chore", "start": "2028-03-11", "rewardPoints": 3, "upForGrabs": true},
+  "request": {
+    "method": "POST",
+    "path": "/api/frames/frame-test/chores",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"summary": "Synthetic chore", "start": "2028-03-11", "reward_points": 3, "up_for_grabs": true}}
+  },
+  "response": {
+    "status": 201,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "chore-synthetic", "type": "chore", "attributes": {"summary": "Synthetic chore", "start": "2028-03-11", "status": "pending", "up_for_grabs": true}}}}
+  }
+}

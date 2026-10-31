@@ -293,6 +293,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
 }
 
 const EVENTS_TARGET: &str = "/skylight/api/frames/frame-test/calendar_events";
+const CHORES_TARGET: &str = "/skylight/api/frames/frame-test/chores";
 const CATEGORIES_TARGET: &str = "/skylight/api/frames/frame-test/categories";
 const LISTS_TARGET: &str = "/skylight/api/frames/frame-test/lists";
 const ITEMS_TARGET: &str = "/skylight/api/frames/frame-test/lists/list-test/list_items";
@@ -312,7 +313,7 @@ fn create_input() -> Value {
     })
 }
 
-fn writes() -> [(&'static str, &'static str, Value, String); 14] {
+fn writes() -> [(&'static str, &'static str, Value, String); 18] {
     [
         (
             "skylight-private.calendar.events.create",
@@ -397,6 +398,30 @@ fn writes() -> [(&'static str, &'static str, Value, String); 14] {
             "DELETE",
             json!({"frameId":"frame-test","categoryId":"category-7","reassignToId":"category-8"}),
             format!("{CATEGORIES_TARGET}/category-7?reassign_to_id=category-8"),
+        ),
+        (
+            "skylight-private.tasks.create",
+            "POST",
+            json!({"frameId":"frame-test","summary":"Feed the cat"}),
+            CHORES_TARGET.to_owned(),
+        ),
+        (
+            "skylight-private.tasks.update",
+            "PUT",
+            json!({"frameId":"frame-test","taskId":"chore-7","status":"complete"}),
+            format!("{CHORES_TARGET}/chore-7"),
+        ),
+        (
+            "skylight-private.tasks.complete",
+            "PUT",
+            json!({"frameId":"frame-test","taskId":"chore-7"}),
+            format!("{CHORES_TARGET}/chore-7/completions"),
+        ),
+        (
+            "skylight-private.tasks.delete",
+            "DELETE",
+            json!({"frameId":"frame-test","taskId":"chore-7"}),
+            format!("{CHORES_TARGET}/chore-7"),
         ),
     ]
 }

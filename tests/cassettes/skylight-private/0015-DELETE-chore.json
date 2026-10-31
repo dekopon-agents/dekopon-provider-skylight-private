@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B4 task (chore) writes, never recorded against Skylight",
+  "capability": "skylight-private.tasks.delete",
+  "input": {"frameId": "frame-test", "taskId": "chore-synthetic"},
+  "request": {
+    "method": "DELETE",
+    "path": "/api/frames/frame-test/chores/chore-synthetic",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": null
+  },
+  "response": {
+    "status": 204,
+    "headers": {},
+    "body": null
+  }
+}

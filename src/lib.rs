@@ -104,7 +104,7 @@ pub struct SkylightPrivate;
 impl Provider for SkylightPrivate {
     const ID: &'static str = "skylight-private";
     const COMMAND_WORDS: &'static [&'static str] = &[COMMAND_WORD];
-    const DESCRIPTION: &'static str = "Unsupported private Skylight household reads and calendar event, list, list item and category writes over broker HTTP";
+    const DESCRIPTION: &'static str = "Unsupported private Skylight household reads and calendar event, list, list item, category and chore writes over broker HTTP";
     type Args = commands::Args;
     type Capabilities = (
         Account,
@@ -129,6 +129,10 @@ impl Provider for SkylightPrivate {
         CategoryFindOrCreate,
         CategoryUpdate,
         CategoryDelete,
+        TaskCreate,
+        TaskUpdate,
+        TaskComplete,
+        TaskDelete,
         Messages,
         Message,
         MessageLikes,
@@ -536,6 +540,54 @@ read_capability!(
     |input: &Value| household::Mutation::CategoryDelete.uri(input),
     |input: &Value| household::Mutation::CategoryDelete.body(input),
     |body: &[u8]| household::Mutation::CategoryDelete.project_body(body)
+);
+read_capability!(
+    TaskCreate,
+    "tasks.create",
+    "Creates one chore with a bounded summary, date, points, category and recurrence",
+    household::TaskCreateInput,
+    method::POST,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::TaskCreate.uri(input),
+    |input: &Value| household::Mutation::TaskCreate.body(input),
+    |body: &[u8]| household::Mutation::TaskCreate.project_body(body)
+);
+read_capability!(
+    TaskUpdate,
+    "tasks.update",
+    "Updates one chore's summary, date, points, status, category or icon",
+    household::TaskUpdateInput,
+    method::PUT,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::TaskUpdate.uri(input),
+    |input: &Value| household::Mutation::TaskUpdate.body(input),
+    |body: &[u8]| household::Mutation::TaskUpdate.project_body(body)
+);
+read_capability!(
+    TaskComplete,
+    "tasks.complete",
+    "Marks one chore occurrence complete, or pending again",
+    household::TaskCompleteInput,
+    method::PUT,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::TaskComplete.uri(input),
+    |input: &Value| household::Mutation::TaskComplete.body(input),
+    |body: &[u8]| household::Mutation::TaskComplete.project_body(body)
+);
+read_capability!(
+    TaskDelete,
+    "tasks.delete",
+    "Deletes one chore series by identifier; which occurrences go is unverified",
+    household::TaskDeleteInput,
+    method::DELETE,
+    EffectKind::ExternalWrite,
+    RiskLevel::Critical,
+    |input: &Value| household::Mutation::TaskDelete.uri(input),
+    |input: &Value| household::Mutation::TaskDelete.body(input),
+    |body: &[u8]| household::Mutation::TaskDelete.project_body(body)
 );
 
 #[allow(unsafe_code)]
@@ -1102,6 +1154,10 @@ mod tests {
             ),
             ("skylight-private.categories.update", RiskLevel::High),
             ("skylight-private.categories.delete", RiskLevel::Critical),
+            ("skylight-private.tasks.create", RiskLevel::High),
+            ("skylight-private.tasks.update", RiskLevel::High),
+            ("skylight-private.tasks.complete", RiskLevel::High),
+            ("skylight-private.tasks.delete", RiskLevel::Critical),
         ];
         assert_eq!(
             manifest
@@ -1572,7 +1628,7 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 31);
+        assert_eq!(manifest.capabilities.len(), 35);
         for capability in &manifest.capabilities {
             assert!(capability.id.as_str().starts_with("skylight-private."));
         }

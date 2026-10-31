@@ -1027,6 +1027,279 @@ struct CategoryBody<'a> {
     color: Option<&'a str>,
 }
 
+// Task (chore) writes: INVENTORY rows 30 and 32-34. `start_time`, `recurring_until` and the
+// completion's `instance_time` stay out (the read side discards them, formats unverified), as does
+// delete's `apply_to` (values unknown). Status takes the two live-observed values.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskCreateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    summary: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    start: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_position"
+    )]
+    #[schemars(with = "u32", range(max = 1_000))]
+    reward_points: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    recurring: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_texts"
+    )]
+    #[schemars(
+        with = "Vec<String>",
+        length(min = 1, max = 16),
+        inner(length(min = 1, max = 256), regex(pattern = "^[ -~]+$"))
+    )]
+    recurrence_set: Option<Vec<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    up_for_grabs: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    emoji_icon: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["pending", "complete"]))]
+    status: Option<String>,
+}
+impl TaskCreateInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        frame_id: String,
+        summary: String,
+        start: Option<String>,
+        reward_points: Option<u64>,
+        category_id: Option<String>,
+        recurring: Option<bool>,
+        recurrence_set: Vec<String>,
+        up_for_grabs: Option<bool>,
+        emoji_icon: Option<String>,
+        status: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            summary,
+            start,
+            reward_points,
+            category_id,
+            recurring,
+            recurrence_set: (!recurrence_set.is_empty()).then_some(recurrence_set),
+            up_for_grabs,
+            emoji_icon,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 3))]
+pub struct TaskUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    summary: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    start: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_position"
+    )]
+    #[schemars(with = "u32", range(max = 1_000))]
+    reward_points: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["pending", "complete"]))]
+    status: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    emoji_icon: Option<String>,
+}
+impl TaskUpdateInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        frame_id: String,
+        task_id: String,
+        summary: Option<String>,
+        start: Option<String>,
+        reward_points: Option<u64>,
+        status: Option<String>,
+        category_id: Option<String>,
+        emoji_icon: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            task_id,
+            summary,
+            start,
+            reward_points,
+            status,
+            category_id,
+            emoji_icon,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskCompleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["complete", "pending"], "default" = "complete"))]
+    status: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    instance_date: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+}
+impl TaskCompleteInput {
+    pub(crate) fn new(
+        frame_id: String,
+        task_id: String,
+        status: Option<String>,
+        instance_date: Option<String>,
+        category_id: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            task_id,
+            status,
+            instance_date,
+            category_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskDeleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+}
+impl TaskDeleteInput {
+    pub(crate) fn new(frame_id: String, task_id: String) -> Self {
+        Self { frame_id, task_id }
+    }
+}
+
+#[derive(Default, Serialize)]
+struct TaskBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reward_points: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recurring: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recurrence_set: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    up_for_grabs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emoji_icon: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_date: Option<&'a str>,
+}
+
 /// The fixed list body, in pyskylight's field order.
 #[derive(Default, Serialize)]
 struct ListBody<'a> {
@@ -1069,10 +1342,14 @@ pub(crate) enum Mutation {
     CategoryFindOrCreate,
     CategoryUpdate,
     CategoryDelete,
+    TaskCreate,
+    TaskUpdate,
+    TaskComplete,
+    TaskDelete,
 }
 
 #[cfg(test)]
-pub(crate) const WRITES: [Mutation; 14] = [
+pub(crate) const WRITES: [Mutation; 18] = [
     Mutation::EventCreate,
     Mutation::EventUpdate,
     Mutation::EventDelete,
@@ -1087,6 +1364,10 @@ pub(crate) const WRITES: [Mutation; 14] = [
     Mutation::CategoryFindOrCreate,
     Mutation::CategoryUpdate,
     Mutation::CategoryDelete,
+    Mutation::TaskCreate,
+    Mutation::TaskUpdate,
+    Mutation::TaskComplete,
+    Mutation::TaskDelete,
 ];
 
 impl Mutation {
@@ -1107,6 +1388,10 @@ impl Mutation {
             Self::CategoryFindOrCreate => "skylight-private.categories.find-or-create",
             Self::CategoryUpdate => "skylight-private.categories.update",
             Self::CategoryDelete => "skylight-private.categories.delete",
+            Self::TaskCreate => "skylight-private.tasks.create",
+            Self::TaskUpdate => "skylight-private.tasks.update",
+            Self::TaskComplete => "skylight-private.tasks.complete",
+            Self::TaskDelete => "skylight-private.tasks.delete",
         }
     }
 
@@ -1122,14 +1407,20 @@ impl Mutation {
             | Self::ItemCreate
             | Self::ListCreate
             | Self::CategoryCreate
-            | Self::CategoryFindOrCreate => method::POST,
+            | Self::CategoryFindOrCreate
+            | Self::TaskCreate => method::POST,
             Self::CategoryUpdate => method::PATCH,
-            Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete | Self::ListUpdate => {
-                method::PUT
-            }
-            Self::EventDelete | Self::ItemDelete | Self::ListDelete | Self::CategoryDelete => {
-                method::DELETE
-            }
+            Self::EventUpdate
+            | Self::ItemUpdate
+            | Self::ItemComplete
+            | Self::ListUpdate
+            | Self::TaskUpdate
+            | Self::TaskComplete => method::PUT,
+            Self::EventDelete
+            | Self::ItemDelete
+            | Self::ListDelete
+            | Self::CategoryDelete
+            | Self::TaskDelete => method::DELETE,
         }
     }
 
@@ -1167,6 +1458,35 @@ impl Mutation {
             }
             Self::CategoryUpdate => (&["frameId", "categoryId"], &["label", "color"]),
             Self::CategoryDelete => (&["frameId", "categoryId"], &["reassignToId"]),
+            Self::TaskCreate => (
+                &["frameId", "summary"],
+                &[
+                    "start",
+                    "rewardPoints",
+                    "categoryId",
+                    "recurring",
+                    "recurrenceSet",
+                    "upForGrabs",
+                    "emojiIcon",
+                    "status",
+                ],
+            ),
+            Self::TaskUpdate => (
+                &["frameId", "taskId"],
+                &[
+                    "summary",
+                    "start",
+                    "rewardPoints",
+                    "status",
+                    "categoryId",
+                    "emojiIcon",
+                ],
+            ),
+            Self::TaskComplete => (
+                &["frameId", "taskId"],
+                &["status", "instanceDate", "categoryId"],
+            ),
+            Self::TaskDelete => (&["frameId", "taskId"], &[]),
         }
     }
 
@@ -1181,7 +1501,11 @@ impl Mutation {
             || required.iter().any(|key| !object.contains_key(*key))
             || (matches!(
                 self,
-                Self::EventUpdate | Self::ItemUpdate | Self::ListUpdate | Self::CategoryUpdate
+                Self::EventUpdate
+                    | Self::ItemUpdate
+                    | Self::ListUpdate
+                    | Self::CategoryUpdate
+                    | Self::TaskUpdate
             ) && !optional.iter().any(|key| object.contains_key(*key)))
         {
             return Err(invalid_household_input());
@@ -1321,6 +1645,21 @@ impl Mutation {
             }
             Some(_) => Err(invalid_household_input()),
         };
+        if let Self::TaskCreate | Self::TaskUpdate | Self::TaskComplete | Self::TaskDelete = self {
+            let base = format!("{FRAMES_URI}/{frame}/chores");
+            if self == Self::TaskCreate {
+                return Ok((base, Some(encode(&task_body(self, object)?)?)));
+            }
+            let path = format!("{base}/{}", selector("taskId")?);
+            return Ok(match self {
+                Self::TaskDelete => (path, None),
+                Self::TaskComplete => (
+                    format!("{path}/completions"),
+                    Some(encode(&task_body(self, object)?)?),
+                ),
+                _ => (path, Some(encode(&task_body(self, object)?)?)),
+            });
+        }
         let body = EventBody {
             summary: checked("summary", valid_summary)?,
             starts_at: checked("startsAt", valid_event_time)?,
@@ -1381,12 +1720,77 @@ impl Mutation {
             | Self::CategoryFindOrCreate
             | Self::CategoryUpdate
             | Self::CategoryDelete => project(body, "category", true, ProjectionKind::Category),
+            Self::TaskCreate | Self::TaskUpdate | Self::TaskComplete | Self::TaskDelete => {
+                project(body, "task", true, ProjectionKind::Task)
+            }
         };
         Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }
 }
 
 const LIST_KINDS: [&str; 2] = ["shopping", "to_do"];
+const TASK_STATUSES: [&str; 2] = ["pending", "complete"];
+const MAX_REWARD_POINTS: u64 = 1_000;
+
+/// Builds a task body from an input whose keys `request` already checked against `fields`.
+fn task_body<'a>(
+    write: Mutation,
+    object: &'a serde_json::Map<String, Value>,
+) -> Result<TaskBody<'a>, ProviderError> {
+    let text = |key: &str, valid: fn(&str) -> bool| match object.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) if valid(value) => Ok(Some(value.as_str())),
+        Some(_) => Err(invalid_household_input()),
+    };
+    let flag = |key: &str| match object.get(key) {
+        None => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(invalid_household_input()),
+    };
+    let date = |value: &str| ordinal(value).is_ok();
+    let selector = |value: &str| safe_segment(value).is_ok();
+    let status = match text("status", |status| TASK_STATUSES.contains(&status))? {
+        None if write == Mutation::TaskComplete => Some("complete"),
+        status => status,
+    };
+    Ok(TaskBody {
+        summary: text("summary", valid_summary)?,
+        start: text("start", date)?,
+        reward_points: match object.get("rewardPoints") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .filter(|points| *points <= MAX_REWARD_POINTS)
+                    .ok_or_else(invalid_household_input)?,
+            ),
+        },
+        category_id: text("categoryId", selector)?,
+        recurring: flag("recurring")?,
+        recurrence_set: match object.get("recurrenceSet") {
+            None => None,
+            Some(Value::Array(rules)) if (1..=MAX_EVENT_LIST).contains(&rules.len()) => Some(
+                rules
+                    .iter()
+                    .map(|rule| match rule.as_str() {
+                        Some(rule) if valid_rule(rule) => Ok(rule),
+                        _ => Err(invalid_household_input()),
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            Some(_) => return Err(invalid_household_input()),
+        },
+        up_for_grabs: flag("upForGrabs")?,
+        emoji_icon: text("emojiIcon", valid_emoji)?,
+        status,
+        instance_date: text("instanceDate", date)?,
+    })
+}
+
+/// 1-32 bytes with no whitespace or control characters: an emoji or a short icon token.
+fn valid_emoji(value: &str) -> bool {
+    (1..=32).contains(&value.len()) && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+}
 
 /// A color token: 1-32 ASCII letters, digits, `#`, `_` or `-` (a hex code or a palette name).
 fn valid_color(value: &str) -> bool {
