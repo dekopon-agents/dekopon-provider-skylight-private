@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B3 list writes, never recorded against Skylight",
+  "capability": "skylight-private.lists.create",
+  "input": {"frameId": "frame-test", "label": "Synthetic groceries", "color": "#2E7D32", "kind": "shopping"},
+  "request": {
+    "method": "POST",
+    "path": "/api/frames/frame-test/lists",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"label": "Synthetic groceries", "color": "#2E7D32", "kind": "shopping"}}
+  },
+  "response": {
+    "status": 201,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "list-synthetic", "type": "list", "attributes": {"label": "Synthetic groceries", "color": "#2E7D32", "kind": "shopping"}}}}
+  }
+}

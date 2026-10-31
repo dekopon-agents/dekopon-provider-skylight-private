@@ -4,13 +4,14 @@ use dekopon_provider_sdk::provider::{Capability, Proposal, Usage};
 
 use crate::{
     Account, Categories, EventCreate, EventDelete, EventUpdate, Events, Frames, ItemComplete,
-    ItemCreate, ItemDelete, ItemUpdate, Items, List, Lists, SkylightPrivate, Tasks, household,
+    ItemCreate, ItemDelete, ItemUpdate, Items, List, ListCreate, ListDelete, ListUpdate, Lists,
+    SkylightPrivate, Tasks, household,
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "skylight",
-    about = "Unsupported private Skylight household reads and calendar event and list item writes over broker HTTP",
+    about = "Unsupported private Skylight household reads and calendar event, list and list item writes over broker HTTP",
     disable_version_flag = true
 )]
 pub struct Args {
@@ -152,6 +153,34 @@ enum Command {
         #[arg(long)]
         item: String,
     },
+    ListCreate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        color: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    ListUpdate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    ListDelete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+    },
 }
 
 pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
@@ -271,6 +300,30 @@ pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
             household::ItemDeleteInput::new(frame, list, item),
             |input| household::Mutation::ItemDelete.uri(input),
         )?,
+        Command::ListCreate {
+            frame,
+            label,
+            color,
+            kind,
+        } => checked::<ListCreate>(
+            household::ListCreateInput::new(frame, label, color, kind),
+            |input| household::Mutation::ListCreate.uri(input),
+        )?,
+        Command::ListUpdate {
+            frame,
+            list,
+            label,
+            color,
+            kind,
+        } => checked::<ListUpdate>(
+            household::ListUpdateInput::new(frame, list, label, color, kind),
+            |input| household::Mutation::ListUpdate.uri(input),
+        )?,
+        Command::ListDelete { frame, list } => {
+            checked::<ListDelete>(household::ListInput::new(frame, list), |input| {
+                household::Mutation::ListDelete.uri(input)
+            })?
+        }
     };
     Ok(proposal)
 }

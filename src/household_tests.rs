@@ -756,6 +756,13 @@ fn write_input(write: Mutation) -> Value {
         Mutation::ItemDelete => {
             json!({"frameId":"frame-test", "listId":"list-test", "itemId":"item-7"})
         }
+        Mutation::ListCreate => {
+            json!({"frameId":"frame-test", "label":"Groceries", "color":"#2E7D32", "kind":"shopping"})
+        }
+        Mutation::ListUpdate => {
+            json!({"frameId":"frame-test", "listId":"list-test", "label":"Chores", "kind":"to_do"})
+        }
+        Mutation::ListDelete => json!({"frameId":"frame-test", "listId":"list-test"}),
     }
 }
 /// Every selector a write's route takes, and its required non-selector field.
@@ -764,6 +771,8 @@ fn write_required(write: Mutation) -> &'static [&'static str] {
         Mutation::EventCreate => &["frameId", "summary"],
         Mutation::EventUpdate | Mutation::EventDelete => &["frameId", "eventId"],
         Mutation::ItemCreate => &["frameId", "listId", "label"],
+        Mutation::ListCreate => &["frameId", "label"],
+        Mutation::ListUpdate | Mutation::ListDelete => &["frameId", "listId"],
         _ => &["frameId", "listId", "itemId"],
     }
 }
@@ -774,6 +783,11 @@ fn write_record(write: Mutation) -> (&'static str, &'static str, Value) {
             "event",
             "summary",
             json!({"data":{"id":"record-7","type":"calendar_event","attributes":{"summary":"Dentist","all_day":false}}}),
+        ),
+        Mutation::ListCreate | Mutation::ListUpdate | Mutation::ListDelete => (
+            "list",
+            "label",
+            json!({"data":{"id":"record-7","type":"list","attributes":{"label":"Dentist","kind":"shopping"}}}),
         ),
         _ => (
             "item",
@@ -1519,6 +1533,207 @@ fn list_item_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_
             "--label",
             "a",
         ],
+    ] {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted: {argv:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
+    }
+}
+
+#[test]
+fn each_list_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
+    let base = "https://app.ourskylight.com/api/frames/frame-test/lists";
+    let cases: [(Mutation, Value, &str, String, &[u8]); 4] = [
+        (
+            Mutation::ListCreate,
+            write_input(Mutation::ListCreate),
+            "POST",
+            base.to_owned(),
+            br##"{"label":"Groceries","color":"#2E7D32","kind":"shopping"}"##,
+        ),
+        (
+            Mutation::ListCreate,
+            json!({"frameId":"frame-test", "label":"Groceries"}),
+            "POST",
+            base.to_owned(),
+            br#"{"label":"Groceries"}"#,
+        ),
+        (
+            Mutation::ListUpdate,
+            write_input(Mutation::ListUpdate),
+            "PUT",
+            format!("{base}/list-test"),
+            br#"{"label":"Chores","kind":"to_do"}"#,
+        ),
+        (
+            Mutation::ListDelete,
+            write_input(Mutation::ListDelete),
+            "DELETE",
+            format!("{base}/list-test"),
+            b"",
+        ),
+    ];
+    for (write, input, method, uri, body) in cases {
+        let calls = std::cell::Cell::new(0);
+        write
+            .invoke(input, |request| {
+                calls.set(calls.get() + 1);
+                assert_write_request(&request, method, &uri, body);
+                Ok(write_response(204, b""))
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1, "{write:?} must send exactly once");
+    }
+}
+
+#[test]
+fn malformed_list_write_inputs_are_refused_before_any_http() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let mut cases: Vec<(Mutation, &str, Value)> = Vec::new();
+    for write in [Mutation::ListCreate, Mutation::ListUpdate] {
+        for (field, value) in [
+            ("label", json!("")),
+            ("label", json!("   ")),
+            ("label", json!(long)),
+            ("label", json!("line\nbreak")),
+            ("label", Value::Null),
+            ("color", json!("")),
+            ("color", json!("x".repeat(33))),
+            ("color", json!("rgb(1, 2, 3)")),
+            ("color", json!("#2E7D32;")),
+            ("color", Value::Null),
+            ("kind", json!("grocery")),
+            ("kind", json!("SHOPPING")),
+            ("kind", json!("")),
+            ("kind", Value::Null),
+            ("hideFromFrame", json!(true)),
+            ("hideOnDevice", json!(true)),
+        ] {
+            cases.push((write, field, value));
+        }
+    }
+    cases.push((Mutation::ListDelete, "label", json!("Groceries")));
+    for (write, field, value) in cases {
+        let mut data = write_input(write);
+        data[field] = value.clone();
+        let error = write
+            .invoke(data, |_| panic!("{write:?} sent invalid {field}={value}"))
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
+    }
+    // A list update must change something; a palette name and a 32-byte color are accepted.
+    let selectors = json!({"frameId":"frame-test","listId":"list-test"});
+    assert!(Mutation::ListUpdate.uri(&selectors).is_err());
+    for color in ["blue", "x".repeat(32).as_str()] {
+        let mut data = selectors.clone();
+        data["color"] = json!(color);
+        assert!(Mutation::ListUpdate.body(&data).is_ok(), "{color}");
+    }
+}
+
+#[test]
+fn list_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags() {
+    let cases = [
+        (
+            vec![
+                "list-create",
+                "--frame",
+                "frame-test",
+                "--label",
+                "Groceries",
+                "--color",
+                "#2E7D32",
+                "--kind",
+                "shopping",
+            ],
+            Mutation::ListCreate,
+            write_input(Mutation::ListCreate),
+        ),
+        (
+            vec![
+                "list-update",
+                "--frame",
+                "frame-test",
+                "--list",
+                "list-test",
+                "--label",
+                "Chores",
+                "--kind",
+                "to_do",
+            ],
+            Mutation::ListUpdate,
+            write_input(Mutation::ListUpdate),
+        ),
+        (
+            vec![
+                "list-delete",
+                "--list",
+                "list-test",
+                "--frame",
+                "frame-test",
+            ],
+            Mutation::ListDelete,
+            write_input(Mutation::ListDelete),
+        ),
+    ];
+    for (words, write, expected) in cases {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability, input, ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), write.capability());
+        assert_eq!(input, expected);
+    }
+    for words in [
+        vec!["list-create", "--frame", "x"],
+        vec![
+            "list-create",
+            "--frame",
+            "x",
+            "--label",
+            "a",
+            "--label",
+            "b",
+        ],
+        vec![
+            "list-create",
+            "--frame",
+            "x",
+            "--label",
+            "a",
+            "--kind",
+            "secret-sentinel",
+        ],
+        vec![
+            "list-create",
+            "--frame",
+            "x",
+            "--label",
+            "a",
+            "--hide-from-frame",
+        ],
+        vec!["list-update", "--frame", "x", "--list", "y"],
+        vec![
+            "list-update",
+            "--frame",
+            "x",
+            "--list",
+            "../secret-sentinel",
+            "--label",
+            "a",
+        ],
+        vec!["list-delete", "--frame", "x"],
+        vec!["list-delete", "--frame", "x", "--list", "y", "--label", "a"],
     ] {
         let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
         let outcome = provider::command::<SkylightPrivate>(&argv, false);

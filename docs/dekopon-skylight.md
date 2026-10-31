@@ -26,7 +26,7 @@ The broker contract is in core and is not repeated here:
 
 | | Provider (guest) | Broker |
 |---|---|---|
-| Request | Builds one fixed request to `app.ourskylight.com` (GET for reads; POST, PUT or DELETE for the calendar event and list item writes); never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
+| Request | Builds one fixed request to `app.ourskylight.com` (GET for reads; POST, PUT or DELETE for the calendar event, list and list item writes); never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
 | Which secret | Proposes none: no `secretUse`, no DRN, no `--secret` operand | Attaches the capability's owner-authored `defaultSecretUse` when the proposal names no secret |
 | Authority | None | Capability decision, a separate Cedar `secret.use` decision on the exact DRN, and the private binding must all allow |
 | OAuth | None: no login, refresh, token cache, rotation, expiry, seed or record | `oauth2Refresh`: record lock, bare refresh-token grant, atomic rotation, scheduled idle refresh, seed adoption, sealing |

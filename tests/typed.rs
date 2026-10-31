@@ -41,7 +41,7 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     conformance::<SkylightPrivate>(component())?;
     let manifest = provider::manifest::<SkylightPrivate>()?;
     assert_eq!(manifest.id.as_str(), "skylight-private");
-    assert_eq!(manifest.capabilities.len(), 15);
+    assert_eq!(manifest.capabilities.len(), 18);
     let expected_ids = [
         ACCOUNT,
         FRAMES,
@@ -58,6 +58,9 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
         "skylight-private.list.items.update",
         "skylight-private.list.items.complete",
         "skylight-private.list.items.delete",
+        "skylight-private.lists.create",
+        "skylight-private.lists.update",
+        "skylight-private.lists.delete",
     ];
     assert_eq!(
         manifest
@@ -115,6 +118,19 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     assert_eq!(
         manifest.capabilities[14].input_schema["required"],
         json!(["frameId", "listId", "itemId"])
+    );
+    let list_create = &manifest.capabilities[15].input_schema;
+    assert_eq!(list_create["required"], json!(["frameId", "label"]));
+    assert_eq!(
+        list_create["properties"]["kind"]["enum"],
+        json!(["shopping", "to_do"])
+    );
+    assert_eq!(list_create["properties"]["color"]["maxLength"], 32);
+    assert!(list_create["properties"].get("hideFromFrame").is_none());
+    assert_eq!(manifest.capabilities[16].input_schema["minProperties"], 3);
+    assert_eq!(
+        manifest.capabilities[17].input_schema["required"],
+        json!(["frameId", "listId"])
     );
     let frame = &manifest.capabilities[2].input_schema["properties"]["frameId"];
     assert_eq!(frame["minLength"], 1);

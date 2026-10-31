@@ -7,10 +7,10 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its fifteen ordered capabilities are independently grantable.
-The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes and
-the four list item writes are `ExternalWrite`: creates, updates and completes are High risk,
-deletes are Critical. Because they are not
+`dekopon.dev/provider/v1alpha1`. Its eighteen ordered capabilities are independently grantable.
+The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes, the
+four list item writes and the three list writes are `ExternalWrite`: creates, updates and completes
+are High risk, deletes are Critical. Because they are not
 `ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
 **No write is granted or bound in any deployment, and whether Skylight accepts a write made with
 the broker's token is unverified: no live write has been made.** Requests default to
@@ -33,11 +33,14 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.list.items.update` | PUT `/frames/{frameId}/lists/{listId}/list_items/{itemId}` | `item`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.list.items.complete` | PUT `/frames/{frameId}/lists/{listId}/list_items/{itemId}` (status only) | `item`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.list.items.delete` | DELETE `/frames/{frameId}/lists/{listId}/list_items/{itemId}` | `item` when a record is returned; `{"ok":true}` on 204 |
+| `skylight-private.lists.create` | POST `/frames/{frameId}/lists` | `list`: the returned record, as the list projection; `{"ok":true}` on 204 |
+| `skylight-private.lists.update` | PUT `/frames/{frameId}/lists/{listId}` | `list`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.lists.delete` | DELETE `/frames/{frameId}/lists/{listId}` (the list and its items) | `list` when a record is returned; `{"ok":true}` on 204 |
 
 The reads' routes are GETs.
 
-The manifest description is `Unsupported private Skylight household reads and calendar event and
-list item writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
+The manifest description is `Unsupported private Skylight household reads and calendar event, list
+and list item writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
 `skylight`. Original account/frames inputs and outputs are unchanged.
 
 ## Owner base URL
@@ -63,8 +66,9 @@ The broker remains the destination-policy boundary: configure `allowedHosts` and
 `tests/cassettes/skylight-private/0001-GET-calendar-events.json` is an **authored synthetic
 cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
 cases. `0002-POST-calendar-events.json` through `0004-DELETE-calendar-event.json` (event writes)
-and `0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes) are
-authored synthetic write exchanges (labelled `provenance:
+`0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes) and
+`0009-POST-lists.json` through `0011-DELETE-list.json` (list writes) are authored synthetic write
+exchanges (labelled `provenance:
 synthetic`); none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
 or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
 native request seam, and replays the same response through the real component. The component
@@ -90,6 +94,9 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `list-item-update --frame ID --list ID --item ID [--label TEXT] [--status completed\|pending] [--position N]` | `frameId`, `listId`, `itemId` and at least one optional field |
 | `list-item-complete --frame ID --list ID --item ID [--status completed\|pending]` | `frameId`, `listId`, `itemId`; optional `status`, default `completed` |
 | `list-item-delete --frame ID --list ID --item ID` | `frameId`, `listId`, `itemId` |
+| `list-create --frame ID --label TEXT [--color COLOR] [--kind shopping\|to_do]` | `frameId`, `label`; optional `color`, `kind` |
+| `list-update --frame ID --list ID [--label TEXT] [--color COLOR] [--kind shopping\|to_do]` | `frameId`, `listId` and at least one optional field |
+| `list-delete --frame ID --list ID` | `frameId`, `listId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
 Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
@@ -137,6 +144,20 @@ The list item writes take the same bounded text rules as the event writes:
 bodies are flat JSON in that field order, with absent fields omitted, following
 `joshuaswarren/pyskylight`'s `add_list_item`, `update_list_item` and `complete_list_item`.
 pyskylight's `extra` passthrough on update is not offered.
+
+### List writes
+
+`list-create` sends `label` and an optional `color` and `kind`. `list-update` sends any of these,
+and must name at least one. `list-delete` sends no body and removes the list with its items.
+Inputs are bounded as follows:
+
+- `label` follows the item label rule.
+- `color` is 1–32 ASCII letters, digits, `#`, `_` or `-`: a hex code or a palette name. Skylight's
+  accepted colors are unverified.
+- `kind` is exactly `shopping` or `to_do`, pyskylight's documented values.
+
+pyskylight's `hide_from_frame` is not offered, because the read side reports a different flag
+(`hide_on_device`). Neither is its `extra` passthrough.
 
 ### Calendar boundaries and interpretation
 
@@ -379,7 +400,8 @@ read” is a source classification, not a safety grant. Actions include mutation
 and uploads; even sensitive GET helpers are not ordinary household reads. The only mutations
 implemented are the three calendar event writes (`event-add`, `event-update`, `event-delete`) and
 the four list item writes (`list-add`, `list-item-update`, `list-item-complete`,
-`list-item-delete`). They are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
+`list-item-delete`) and the three list writes (`list-create`, `list-update`, `list-delete`). They
+are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
 unverified. No other mutation, no auth command and no sensitive helper is implemented. Tasks is now supported through the browser-verified chores
 route, not an extra Python registration. All names below are Python registrations, not aliases.
 
@@ -427,9 +449,9 @@ list index and populated detail included items were browser-observed. Every test
 | `chore-update` | Action | Not implemented; out of scope |
 | `chore-complete` | Action | Not implemented; out of scope |
 | `chore-delete` | Action | Not implemented; out of scope |
-| `list-create` | Action | Not implemented; out of scope |
-| `list-update` | Action | Not implemented; out of scope |
-| `list-delete` | Action | Not implemented; out of scope |
+| `list-create` | Action | Partial: `list-create` → `lists.create`; label, color, `shopping`/`to_do` kind; no hide flag or extra; ungranted, live acceptance unverified |
+| `list-update` | Action | Partial: `list-update` → `lists.update`; label, color, kind; ungranted, live acceptance unverified |
+| `list-delete` | Action | Partial: `list-delete` → `lists.delete`; ungranted, live acceptance unverified |
 | `list-item-update` | Action | Partial: `list-item-update` → `list.items.update`; label, `completed`/`pending` status, position; no `extra`; ungranted, live acceptance unverified |
 | `list-item-complete` | Action | Partial: `list-item-complete` → `list.items.complete`; `completed` or `pending`; ungranted, live acceptance unverified |
 | `list-item-delete` | Action | Partial: `list-item-delete` → `list.items.delete`; ungranted, live acceptance unverified |
@@ -604,11 +626,10 @@ recurrence-instance semantics, section schemas and complete household coverage r
 Successful browser reads use the browser's separate authentication context; native broker HTTP
 success still requires separately authorized validation. No credential/session data is in fixtures.
 
-The component artifact ceiling is **1,048,576 bytes (1 MiB)**. To stay under it as write and read
-capabilities are added, `Cargo.toml`'s `[profile.release]` sets `opt-level = "z"` and
-`strip = true`. That took the 0.8.1-plus-writes component from 1,044,555 to 726,660 bytes.
-Two builds from a clean target directory are byte-identical. The embedded license sections are kept;
-only the symbol name section is dropped, so wasm backtraces carry no function names. The former 589,824-byte
+The component artifact ceiling is **1,048,576 bytes (1 MiB)**. To stay under it,
+`Cargo.toml`'s `[profile.release]` sets `opt-level = "z"` and `strip = true`. The embedded
+license sections are kept; only the symbol name section is dropped, so wasm backtraces carry no
+function names. The former 589,824-byte
 (576 KiB) bound predated the SDK-owned stdio bindings and typed export, which add code without
 adding ambient authority. This changes only the artifact-size gate: **128,000,000 fuel,
 32 MiB guest memory, ten seconds, one request (a GET for reads, the fixed method for writes),
