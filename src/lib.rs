@@ -125,6 +125,15 @@ impl Provider for SkylightPrivate {
         ListCreate,
         ListUpdate,
         ListDelete,
+        Messages,
+        Message,
+        MessageLikes,
+        MessageComments,
+        Albums,
+        AlbumMessages,
+        AlbumMessageIds,
+        MonthInReview,
+        MonthInReviews,
     );
 
     fn propose(args: Self::Args, _stdin_piped: bool) -> Result<Proposal<Self>, Usage> {
@@ -283,6 +292,78 @@ read_capability!(
     household::TasksInput,
     |input: &Value| household::Read::Tasks.uri(input),
     |body: &[u8]| household::Read::Tasks.project_body(body)
+);
+read_capability!(
+    Messages,
+    "messages.list",
+    "Lists bounded photo message identifiers and captions; never media URLs; first page only",
+    household::FrameInput,
+    |input: &Value| household::Read::Messages.uri(input),
+    |body: &[u8]| household::Read::Messages.project_body(body)
+);
+read_capability!(
+    Message,
+    "messages.read",
+    "Reads one photo message's identifier and caption; never media URLs",
+    household::MessageInput,
+    |input: &Value| household::Read::Message.uri(input),
+    |body: &[u8]| household::Read::Message.project_body(body)
+);
+read_capability!(
+    MessageLikes,
+    "messages.likes.list",
+    "Lists bounded likes on one photo message; never media URLs",
+    household::MessageInput,
+    |input: &Value| household::Read::MessageLikes.uri(input),
+    |body: &[u8]| household::Read::MessageLikes.project_body(body)
+);
+read_capability!(
+    MessageComments,
+    "messages.comments.list",
+    "Lists bounded comments on one photo message; never media URLs",
+    household::MessageInput,
+    |input: &Value| household::Read::MessageComments.uri(input),
+    |body: &[u8]| household::Read::MessageComments.project_body(body)
+);
+read_capability!(
+    Albums,
+    "albums.list",
+    "Lists bounded album identifiers and titles; never media URLs",
+    household::FrameInput,
+    |input: &Value| household::Read::Albums.uri(input),
+    |body: &[u8]| household::Read::Albums.project_body(body)
+);
+read_capability!(
+    AlbumMessages,
+    "albums.messages.list",
+    "Lists bounded photo messages in one album; never media URLs",
+    household::AlbumInput,
+    |input: &Value| household::Read::AlbumMessages.uri(input),
+    |body: &[u8]| household::Read::AlbumMessages.project_body(body)
+);
+read_capability!(
+    AlbumMessageIds,
+    "albums.message-ids.list",
+    "Lists the photo message identifiers in one album",
+    household::AlbumInput,
+    |input: &Value| household::Read::AlbumMessageIds.uri(input),
+    |body: &[u8]| household::Read::AlbumMessageIds.project_body(body)
+);
+read_capability!(
+    MonthInReview,
+    "month-in-review.read",
+    "Reads the current month-in-review identifier; never media URLs",
+    household::FrameInput,
+    |input: &Value| household::Read::MonthInReview.uri(input),
+    |body: &[u8]| household::Read::MonthInReview.project_body(body)
+);
+read_capability!(
+    MonthInReviews,
+    "month-in-review.list",
+    "Lists bounded month-in-review identifiers; never media URLs",
+    household::FrameInput,
+    |input: &Value| household::Read::MonthInReviews.uri(input),
+    |body: &[u8]| household::Read::MonthInReviews.project_body(body)
 );
 read_capability!(
     EventCreate,
@@ -943,6 +1024,7 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
+        let media = super::household::MEDIA_READS.map(super::household::Read::capability);
         let reads: Vec<_> = [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY]
             .into_iter()
             .chain(super::household::READS.map(super::household::Read::capability))
@@ -972,6 +1054,7 @@ mod tests {
                 .iter()
                 .copied()
                 .chain(writes.map(|(id, _)| id))
+                .chain(media)
                 .collect::<Vec<_>>()
         );
         let empty_schema = json!({
@@ -980,7 +1063,7 @@ mod tests {
         });
         for capability in &manifest.capabilities {
             let id = capability.id.as_str();
-            if reads.contains(&id) {
+            if reads.contains(&id) || media.contains(&id) {
                 assert_eq!(capability.effect, EffectKind::ReadOnly, "{id}");
                 assert_eq!(capability.risk, RiskLevel::Medium, "{id}");
             } else {
@@ -1430,7 +1513,7 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 18);
+        assert_eq!(manifest.capabilities.len(), 27);
         for capability in &manifest.capabilities {
             assert!(capability.id.as_str().starts_with("skylight-private."));
         }

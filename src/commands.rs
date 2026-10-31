@@ -3,9 +3,10 @@ use clap::{Parser, Subcommand};
 use dekopon_provider_sdk::provider::{Capability, Proposal, Usage};
 
 use crate::{
-    Account, Categories, EventCreate, EventDelete, EventUpdate, Events, Frames, ItemComplete,
-    ItemCreate, ItemDelete, ItemUpdate, Items, List, ListCreate, ListDelete, ListUpdate, Lists,
-    SkylightPrivate, Tasks, household,
+    Account, AlbumMessageIds, AlbumMessages, Albums, Categories, EventCreate, EventDelete,
+    EventUpdate, Events, Frames, ItemComplete, ItemCreate, ItemDelete, ItemUpdate, Items, List,
+    ListCreate, ListDelete, ListUpdate, Lists, Message, MessageComments, MessageLikes, Messages,
+    MonthInReview, MonthInReviews, SkylightPrivate, Tasks, household,
 };
 
 #[derive(Debug, Parser)]
@@ -23,6 +24,52 @@ pub struct Args {
 enum Command {
     Account,
     Frames,
+    Messages {
+        #[arg(long)]
+        frame: String,
+    },
+    Message {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        message: String,
+    },
+    MessageLikes {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        message: String,
+    },
+    MessageComments {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        message: String,
+    },
+    Albums {
+        #[arg(long)]
+        frame: String,
+    },
+    AlbumMessages {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        album: String,
+    },
+    AlbumMessageIds {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        album: String,
+    },
+    MonthInReview {
+        #[arg(long)]
+        frame: String,
+    },
+    MonthInReviews {
+        #[arg(long)]
+        frame: String,
+    },
     Categories {
         #[arg(long)]
         frame: String,
@@ -187,6 +234,51 @@ pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
     let proposal = match args.command {
         Command::Account => Proposal::to::<Account>(crate::EmptyInput {}),
         Command::Frames => Proposal::to::<Frames>(crate::EmptyInput {}),
+        Command::Messages { frame } => {
+            checked::<Messages>(household::FrameInput::new(frame), |input| {
+                household::Read::Messages.uri(input)
+            })?
+        }
+        Command::Message { frame, message } => {
+            checked::<Message>(household::MessageInput::new(frame, message), |input| {
+                household::Read::Message.uri(input)
+            })?
+        }
+        Command::MessageLikes { frame, message } => {
+            checked::<MessageLikes>(household::MessageInput::new(frame, message), |input| {
+                household::Read::MessageLikes.uri(input)
+            })?
+        }
+        Command::MessageComments { frame, message } => {
+            checked::<MessageComments>(household::MessageInput::new(frame, message), |input| {
+                household::Read::MessageComments.uri(input)
+            })?
+        }
+        Command::Albums { frame } => {
+            checked::<Albums>(household::FrameInput::new(frame), |input| {
+                household::Read::Albums.uri(input)
+            })?
+        }
+        Command::AlbumMessages { frame, album } => {
+            checked::<AlbumMessages>(household::AlbumInput::new(frame, album), |input| {
+                household::Read::AlbumMessages.uri(input)
+            })?
+        }
+        Command::AlbumMessageIds { frame, album } => {
+            checked::<AlbumMessageIds>(household::AlbumInput::new(frame, album), |input| {
+                household::Read::AlbumMessageIds.uri(input)
+            })?
+        }
+        Command::MonthInReview { frame } => {
+            checked::<MonthInReview>(household::FrameInput::new(frame), |input| {
+                household::Read::MonthInReview.uri(input)
+            })?
+        }
+        Command::MonthInReviews { frame } => {
+            checked::<MonthInReviews>(household::FrameInput::new(frame), |input| {
+                household::Read::MonthInReviews.uri(input)
+            })?
+        }
         Command::Categories { frame } => {
             checked::<Categories>(household::FrameInput::new(frame), |input| {
                 household::Read::Categories.uri(input)
