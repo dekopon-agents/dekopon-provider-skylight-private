@@ -744,10 +744,43 @@ fn write_input(write: Mutation) -> Value {
             json!({"frameId":"frame-test", "eventId":"event-7", "summary":"Dentist moved", "allDay":true})
         }
         Mutation::EventDelete => json!({"frameId":"frame-test", "eventId":"event-7"}),
+        Mutation::ItemCreate => {
+            json!({"frameId":"frame-test", "listId":"list-test", "label":"Milk", "section":"Dairy"})
+        }
+        Mutation::ItemUpdate => {
+            json!({"frameId":"frame-test", "listId":"list-test", "itemId":"item-7", "label":"Oat milk", "status":"pending", "position":3})
+        }
+        Mutation::ItemComplete => {
+            json!({"frameId":"frame-test", "listId":"list-test", "itemId":"item-7"})
+        }
+        Mutation::ItemDelete => {
+            json!({"frameId":"frame-test", "listId":"list-test", "itemId":"item-7"})
+        }
     }
 }
-fn event_record() -> Value {
-    json!({"data":{"id":"event-7","type":"calendar_event","attributes":{"summary":"Dentist","all_day":false}}})
+/// Every selector a write's route takes, and its required non-selector field.
+fn write_required(write: Mutation) -> &'static [&'static str] {
+    match write {
+        Mutation::EventCreate => &["frameId", "summary"],
+        Mutation::EventUpdate | Mutation::EventDelete => &["frameId", "eventId"],
+        Mutation::ItemCreate => &["frameId", "listId", "label"],
+        _ => &["frameId", "listId", "itemId"],
+    }
+}
+/// The returned record and its output key for each resource.
+fn write_record(write: Mutation) -> (&'static str, &'static str, Value) {
+    match write {
+        Mutation::EventCreate | Mutation::EventUpdate | Mutation::EventDelete => (
+            "event",
+            "summary",
+            json!({"data":{"id":"record-7","type":"calendar_event","attributes":{"summary":"Dentist","all_day":false}}}),
+        ),
+        _ => (
+            "item",
+            "label",
+            json!({"data":{"id":"record-7","type":"list_item","attributes":{"label":"Dentist","status":"completed"}}}),
+        ),
+    }
 }
 fn write_response(status: u16, body: &[u8]) -> Response {
     Response {
@@ -831,36 +864,47 @@ fn each_event_write_sends_one_request_with_its_exact_method_uri_headers_and_json
 }
 
 #[test]
-fn write_responses_project_the_returned_event_and_only_a_204_is_bare_ok() {
-    let record = event_record().to_string();
-    for (write, status) in [
-        (Mutation::EventCreate, 201),
-        (Mutation::EventCreate, 200),
-        (Mutation::EventUpdate, 200),
-        (Mutation::EventDelete, 200),
-        (Mutation::EventDelete, 201),
-    ] {
-        let output = write
-            .invoke(write_input(write), |_| {
-                Ok(write_response(status, record.as_bytes()))
-            })
-            .unwrap();
-        assert_eq!(output["event"]["id"], "event-7", "{write:?} {status}");
-        assert_eq!(output["event"]["summary"], "Dentist");
-        assert_eq!(output["coverage"], "bounded-response");
-        assert!(output.get("ok").is_none());
+fn write_2xx_responses_project_the_record_or_succeed_without_one_and_never_invite_a_retry() {
+    for write in WRITES {
+        let (key, text, record) = write_record(write);
+        let record = record.to_string();
+        for status in [200, 201] {
+            let output = write
+                .invoke(write_input(write), |_| {
+                    Ok(write_response(status, record.as_bytes()))
+                })
+                .unwrap();
+            assert_eq!(output[key]["id"], "record-7", "{write:?} {status}");
+            assert_eq!(output[key][text], "Dentist");
+            assert_eq!(output["coverage"], "bounded-response");
+            assert!(output.get("ok").is_none());
+        }
     }
+    let record = write_record(Mutation::EventCreate).2.to_string();
     for write in WRITES {
         let output = write
             .invoke(write_input(write), |_| Ok(write_response(204, b"")))
             .unwrap();
         assert_eq!(output, json!({"ok": true}), "{write:?}");
+        // The write applied: an unprojectable or oversized record is a success without a
+        // record, never an error a caller would retry.
+        let oversized = vec![b' '; MAX_RESPONSE_BODY_BYTES + 1];
         for status in [200, 201] {
-            for body in [b"".as_slice(), b"{}", br#"{"data":null}"#, b"not json"] {
-                let error = write
+            for body in [
+                b"".as_slice(),
+                b"{}",
+                br#"{"data":null}"#,
+                b"not json",
+                &oversized,
+            ] {
+                let output = write
                     .invoke(write_input(write), |_| Ok(write_response(status, body)))
-                    .unwrap_err();
-                assert_eq!(error.code(), "invalid-response", "{write:?} {status}");
+                    .unwrap();
+                assert_eq!(
+                    output,
+                    json!({"ok": true, "recordProjected": false}),
+                    "{write:?} {status}"
+                );
             }
         }
         for (status, code) in [
@@ -913,9 +957,11 @@ fn malformed_event_write_inputs_are_refused_before_any_http() {
             cases.push((write, field, json!("secret-sentinel")));
         }
         for value in ["/", "%2F", "?", "#", "..", "a/b", "x\r\n", "", "é", "x.y"] {
-            cases.push((write, "frameId", json!(value)));
-            if write != Mutation::EventCreate {
-                cases.push((write, "eventId", json!(value)));
+            for selector in write_required(write)
+                .iter()
+                .filter(|field| field.ends_with("Id"))
+            {
+                cases.push((write, selector, json!(value)));
             }
         }
         cases.push((write, "frameId", Value::Null));
@@ -982,12 +1028,7 @@ fn malformed_event_write_inputs_are_refused_before_any_http() {
         assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
     }
     for write in WRITES {
-        let selector = if write == Mutation::EventCreate {
-            "summary"
-        } else {
-            "eventId"
-        };
-        for field in ["frameId", selector] {
+        for &field in write_required(write) {
             let mut data = write_input(write);
             data.as_object_mut().unwrap().remove(field);
             assert!(write.uri(&data).is_err(), "{write:?} without {field}");
@@ -1184,6 +1225,300 @@ fn event_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flag
             "z",
         ],
         vec!["event-delete", "x", "y"],
+    ] {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted: {argv:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
+    }
+}
+
+#[test]
+fn each_list_item_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
+    let base = "https://app.ourskylight.com/api/frames/frame-test/lists/list-test/list_items";
+    let cases: [(Mutation, Value, &str, String, &[u8]); 6] = [
+        (
+            Mutation::ItemCreate,
+            write_input(Mutation::ItemCreate),
+            "POST",
+            base.to_owned(),
+            br#"{"label":"Milk","section":"Dairy"}"#,
+        ),
+        (
+            Mutation::ItemCreate,
+            json!({"frameId":"frame-test", "listId":"list-test", "label":"Milk"}),
+            "POST",
+            base.to_owned(),
+            br#"{"label":"Milk"}"#,
+        ),
+        (
+            Mutation::ItemUpdate,
+            write_input(Mutation::ItemUpdate),
+            "PUT",
+            format!("{base}/item-7"),
+            br#"{"label":"Oat milk","status":"pending","position":3}"#,
+        ),
+        // Completing without a status completes; `pending` reopens.
+        (
+            Mutation::ItemComplete,
+            write_input(Mutation::ItemComplete),
+            "PUT",
+            format!("{base}/item-7"),
+            br#"{"status":"completed"}"#,
+        ),
+        (
+            Mutation::ItemComplete,
+            json!({"frameId":"frame-test", "listId":"list-test", "itemId":"item-7", "status":"pending"}),
+            "PUT",
+            format!("{base}/item-7"),
+            br#"{"status":"pending"}"#,
+        ),
+        (
+            Mutation::ItemDelete,
+            write_input(Mutation::ItemDelete),
+            "DELETE",
+            format!("{base}/item-7"),
+            b"",
+        ),
+    ];
+    for (write, input, method, uri, body) in cases {
+        let calls = std::cell::Cell::new(0);
+        write
+            .invoke(input, |request| {
+                calls.set(calls.get() + 1);
+                assert_write_request(&request, method, &uri, body);
+                Ok(write_response(204, b""))
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1, "{write:?} must send exactly once");
+    }
+}
+
+#[test]
+fn malformed_list_item_write_inputs_are_refused_before_any_http() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let mut cases: Vec<(Mutation, &str, Value)> = Vec::new();
+    for (field, value) in [
+        ("label", json!("")),
+        ("label", json!("   ")),
+        ("label", json!(long)),
+        ("label", json!("line\nbreak")),
+        ("label", Value::Null),
+        ("label", json!(["Milk"])),
+        ("section", json!("")),
+        ("section", json!(long)),
+        ("section", json!("tab\there")),
+        ("section", Value::Null),
+        ("status", json!("completed")),
+        ("position", json!(1)),
+    ] {
+        cases.push((Mutation::ItemCreate, field, value));
+    }
+    for write in [Mutation::ItemUpdate, Mutation::ItemComplete] {
+        for value in [
+            json!("done"),
+            json!("COMPLETED"),
+            json!("complete"),
+            json!(""),
+            json!(true),
+            Value::Null,
+        ] {
+            cases.push((write, "status", value));
+        }
+    }
+    for (field, value) in [
+        ("label", json!("")),
+        ("label", json!(long)),
+        ("position", json!(-1)),
+        ("position", json!(1.5)),
+        ("position", json!(1_000_001)),
+        ("position", json!("3")),
+        ("position", Value::Null),
+        ("section", json!("Dairy")),
+    ] {
+        cases.push((Mutation::ItemUpdate, field, value));
+    }
+    cases.push((Mutation::ItemComplete, "label", json!("Milk")));
+    cases.push((Mutation::ItemComplete, "position", json!(3)));
+    cases.push((Mutation::ItemDelete, "status", json!("completed")));
+    for (write, field, value) in cases {
+        let mut data = write_input(write);
+        data[field] = value.clone();
+        let error = write
+            .invoke(data, |_| panic!("{write:?} sent invalid {field}={value}"))
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
+    }
+    // An item update must change something; position 0 and 1,000,000 are the accepted bounds.
+    let selectors = json!({"frameId":"frame-test","listId":"list-test","itemId":"item-7"});
+    assert!(Mutation::ItemUpdate.uri(&selectors).is_err());
+    for position in [0, 1_000_000] {
+        let mut data = selectors.clone();
+        data["position"] = json!(position);
+        assert!(Mutation::ItemUpdate.body(&data).is_ok(), "{position}");
+    }
+}
+
+#[test]
+fn list_item_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags() {
+    let cases = [
+        (
+            vec![
+                "list-add",
+                "--frame",
+                "frame-test",
+                "--list",
+                "list-test",
+                "--label",
+                "Milk",
+                "--section",
+                "Dairy",
+            ],
+            Mutation::ItemCreate,
+            write_input(Mutation::ItemCreate),
+        ),
+        (
+            vec![
+                "list-item-update",
+                "--frame",
+                "frame-test",
+                "--list",
+                "list-test",
+                "--item",
+                "item-7",
+                "--label",
+                "Oat milk",
+                "--status",
+                "pending",
+                "--position",
+                "3",
+            ],
+            Mutation::ItemUpdate,
+            write_input(Mutation::ItemUpdate),
+        ),
+        (
+            vec![
+                "list-item-complete",
+                "--frame",
+                "frame-test",
+                "--list",
+                "list-test",
+                "--item",
+                "item-7",
+            ],
+            Mutation::ItemComplete,
+            write_input(Mutation::ItemComplete),
+        ),
+        (
+            vec![
+                "list-item-delete",
+                "--item",
+                "item-7",
+                "--list",
+                "list-test",
+                "--frame",
+                "frame-test",
+            ],
+            Mutation::ItemDelete,
+            write_input(Mutation::ItemDelete),
+        ),
+    ];
+    for (words, write, expected) in cases {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability, input, ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), write.capability());
+        assert_eq!(input, expected);
+    }
+    for words in [
+        vec!["list-add", "--frame", "x", "--list", "y"],
+        vec![
+            "list-add", "--frame", "x", "--list", "y", "--label", "a", "--label", "b",
+        ],
+        vec![
+            "list-add",
+            "--frame",
+            "x",
+            "--list",
+            "../secret-sentinel",
+            "--label",
+            "a",
+        ],
+        vec![
+            "list-add",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--label",
+            "a",
+            "--status",
+            "completed",
+        ],
+        vec![
+            "list-item-update",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--item",
+            "z",
+        ],
+        vec![
+            "list-item-update",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--item",
+            "z",
+            "--status",
+            "done",
+        ],
+        vec![
+            "list-item-update",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--item",
+            "z",
+            "--position",
+            "-1",
+        ],
+        vec![
+            "list-item-complete",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--item",
+            "z",
+            "--status",
+            "secret-sentinel",
+        ],
+        vec!["list-item-complete", "--frame", "x", "--list", "y"],
+        vec![
+            "list-item-delete",
+            "--frame",
+            "x",
+            "--list",
+            "y",
+            "--item",
+            "z",
+            "--label",
+            "a",
+        ],
     ] {
         let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
         let outcome = provider::command::<SkylightPrivate>(&argv, false);

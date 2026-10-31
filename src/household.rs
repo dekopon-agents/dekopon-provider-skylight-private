@@ -552,6 +552,165 @@ struct EventBody<'a> {
     rrule: Option<Vec<&'a str>>,
 }
 
+// List item writes: INVENTORY rows 23 and 38-40. Status is limited to the two values the item
+// projection knows (`pending`, `completed`).
+const MAX_ITEM_POSITION: u64 = 1_000_000;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ItemCreateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    label: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    section: Option<String>,
+}
+impl ItemCreateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        list_id: String,
+        label: String,
+        section: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            list_id,
+            label,
+            section,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 4))]
+pub struct ItemUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    item_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    label: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["completed", "pending"]))]
+    status: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_position"
+    )]
+    #[schemars(with = "u32", range(max = 1_000_000))]
+    position: Option<u64>,
+}
+impl ItemUpdateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        list_id: String,
+        item_id: String,
+        label: Option<String>,
+        status: Option<String>,
+        position: Option<u64>,
+    ) -> Self {
+        Self {
+            frame_id,
+            list_id,
+            item_id,
+            label,
+            status,
+            position,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ItemCompleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    item_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["completed", "pending"], "default" = "completed"))]
+    status: Option<String>,
+}
+impl ItemCompleteInput {
+    pub(crate) fn new(
+        frame_id: String,
+        list_id: String,
+        item_id: String,
+        status: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            list_id,
+            item_id,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ItemDeleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    item_id: String,
+}
+impl ItemDeleteInput {
+    pub(crate) fn new(frame_id: String, list_id: String, item_id: String) -> Self {
+        Self {
+            frame_id,
+            list_id,
+            item_id,
+        }
+    }
+}
+
+fn present_position<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
+}
+
+/// The fixed list item body, in pyskylight's field order.
+#[derive(Default, Serialize)]
+struct ItemBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    section: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<u64>,
+}
+
 // Variants name resource then verb; later batches add other resources' writes here.
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -559,13 +718,21 @@ pub(crate) enum Mutation {
     EventCreate,
     EventUpdate,
     EventDelete,
+    ItemCreate,
+    ItemUpdate,
+    ItemComplete,
+    ItemDelete,
 }
 
 #[cfg(test)]
-pub(crate) const WRITES: [Mutation; 3] = [
+pub(crate) const WRITES: [Mutation; 7] = [
     Mutation::EventCreate,
     Mutation::EventUpdate,
     Mutation::EventDelete,
+    Mutation::ItemCreate,
+    Mutation::ItemUpdate,
+    Mutation::ItemComplete,
+    Mutation::ItemDelete,
 ];
 
 impl Mutation {
@@ -575,6 +742,10 @@ impl Mutation {
             Self::EventCreate => "skylight-private.calendar.events.create",
             Self::EventUpdate => "skylight-private.calendar.events.update",
             Self::EventDelete => "skylight-private.calendar.events.delete",
+            Self::ItemCreate => "skylight-private.list.items.create",
+            Self::ItemUpdate => "skylight-private.list.items.update",
+            Self::ItemComplete => "skylight-private.list.items.complete",
+            Self::ItemDelete => "skylight-private.list.items.delete",
         }
     }
 
@@ -586,9 +757,9 @@ impl Mutation {
     #[cfg(test)]
     pub(crate) fn method(self) -> &'static str {
         match self {
-            Self::EventCreate => method::POST,
-            Self::EventUpdate => method::PUT,
-            Self::EventDelete => method::DELETE,
+            Self::EventCreate | Self::ItemCreate => method::POST,
+            Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete => method::PUT,
+            Self::EventDelete | Self::ItemDelete => method::DELETE,
         }
     }
 
@@ -611,6 +782,13 @@ impl Mutation {
                 &["summary", "startsAt", "endsAt", "allDay", "timezone"],
             ),
             Self::EventDelete => (&["frameId", "eventId"], &[]),
+            Self::ItemCreate => (&["frameId", "listId", "label"], &["section"]),
+            Self::ItemUpdate => (
+                &["frameId", "listId", "itemId"],
+                &["label", "status", "position"],
+            ),
+            Self::ItemComplete => (&["frameId", "listId", "itemId"], &["status"]),
+            Self::ItemDelete => (&["frameId", "listId", "itemId"], &[]),
         }
     }
 
@@ -623,7 +801,8 @@ impl Mutation {
             .keys()
             .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
             || required.iter().any(|key| !object.contains_key(*key))
-            || (self == Self::EventUpdate && !optional.iter().any(|key| object.contains_key(*key)))
+            || (matches!(self, Self::EventUpdate | Self::ItemUpdate)
+                && !optional.iter().any(|key| object.contains_key(*key)))
         {
             return Err(invalid_household_input());
         }
@@ -638,6 +817,63 @@ impl Mutation {
             Ok::<_, ProviderError>(value)
         };
         let frame = selector("frameId")?;
+        if let Self::ItemCreate | Self::ItemUpdate | Self::ItemComplete | Self::ItemDelete = self {
+            let base = format!(
+                "{FRAMES_URI}/{frame}/lists/{}/list_items",
+                selector("listId")?
+            );
+            if self == Self::ItemCreate {
+                let body = ItemBody {
+                    label: Some(
+                        text("label")?
+                            .filter(|label| valid_summary(label))
+                            .ok_or_else(invalid_household_input)?,
+                    ),
+                    section: match text("section")? {
+                        Some(section) if !valid_summary(section) => {
+                            return Err(invalid_household_input());
+                        }
+                        section => section,
+                    },
+                    ..ItemBody::default()
+                };
+                return Ok((base, Some(encode(&body)?)));
+            }
+            let path = format!("{base}/{}", selector("itemId")?);
+            let status = match text("status")? {
+                None if self == Self::ItemComplete => Some(ITEM_COMPLETED),
+                Some(status @ (ITEM_COMPLETED | ITEM_PENDING)) => Some(status),
+                None => None,
+                Some(_) => return Err(invalid_household_input()),
+            };
+            let body = match self {
+                Self::ItemDelete => return Ok((path, None)),
+                Self::ItemComplete => ItemBody {
+                    status,
+                    ..ItemBody::default()
+                },
+                _ => ItemBody {
+                    label: match text("label")? {
+                        Some(label) if !valid_summary(label) => {
+                            return Err(invalid_household_input());
+                        }
+                        label => label,
+                    },
+                    status,
+                    position: match object.get("position") {
+                        None => None,
+                        Some(value) => Some(
+                            value
+                                .as_u64()
+                                .filter(|position| *position <= MAX_ITEM_POSITION)
+                                .ok_or_else(invalid_household_input)?,
+                        ),
+                    },
+                    ..ItemBody::default()
+                },
+            };
+            return Ok((path, Some(encode(&body)?)));
+        }
         let base = format!("{FRAMES_URI}/{frame}/calendar_events");
         if self == Self::EventDelete {
             let event = selector("eventId")?;
@@ -680,8 +916,7 @@ impl Mutation {
         } else {
             base
         };
-        let body = serde_json::to_vec(&body).map_err(|_| invalid_household_input())?;
-        Ok((path, Some(body)))
+        Ok((path, Some(encode(&body)?)))
     }
 
     pub(crate) fn uri(self, input: &Value) -> Result<String, ProviderError> {
@@ -705,10 +940,27 @@ impl Mutation {
         }
     }
 
-    /// A 200 or 201 must carry the event record, DELETE included; only a 204 has none.
+    /// A 200 or 201 projects the written record, DELETE included. The write has applied by then,
+    /// so a record that cannot be projected still succeeds, marked `recordProjected:false`,
+    /// rather than failing and inviting a retry that would repeat the write.
     pub(crate) fn project_body(self, body: &[u8]) -> Result<Value, ProviderError> {
-        project(body, "event", true, ProjectionKind::Event)
+        let projected = match self {
+            Self::EventCreate | Self::EventUpdate | Self::EventDelete => {
+                project(body, "event", true, ProjectionKind::Event)
+            }
+            Self::ItemCreate | Self::ItemUpdate | Self::ItemComplete | Self::ItemDelete => {
+                project(body, "item", true, ProjectionKind::Item)
+            }
+        };
+        Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }
+}
+
+const ITEM_COMPLETED: &str = "completed";
+const ITEM_PENDING: &str = "pending";
+
+fn encode<T: Serialize>(body: &T) -> Result<Vec<u8>, ProviderError> {
+    serde_json::to_vec(body).map_err(|_| invalid_household_input())
 }
 
 fn valid_summary(value: &str) -> bool {

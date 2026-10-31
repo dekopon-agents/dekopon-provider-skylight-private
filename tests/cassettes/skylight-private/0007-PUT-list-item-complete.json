@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B2 list item writes, never recorded against Skylight",
+  "capability": "skylight-private.list.items.complete",
+  "input": {"frameId": "frame-test", "listId": "list-test", "itemId": "item-synthetic"},
+  "request": {
+    "method": "PUT",
+    "path": "/api/frames/frame-test/lists/list-test/list_items/item-synthetic",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"status": "completed"}}
+  },
+  "response": {
+    "status": 200,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "item-synthetic", "type": "list_item", "attributes": {"label": "Synthetic oat milk", "status": "completed"}}}}
+  }
+}

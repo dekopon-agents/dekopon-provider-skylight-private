@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B2 list item writes, never recorded against Skylight",
+  "capability": "skylight-private.list.items.create",
+  "input": {"frameId": "frame-test", "listId": "list-test", "label": "Synthetic milk", "section": "Synthetic dairy"},
+  "request": {
+    "method": "POST",
+    "path": "/api/frames/frame-test/lists/list-test/list_items",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"label": "Synthetic milk", "section": "Synthetic dairy"}}
+  },
+  "response": {
+    "status": 201,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "item-synthetic", "type": "list_item", "attributes": {"label": "Synthetic milk", "section": "Synthetic dairy", "status": "pending"}}}}
+  }
+}
