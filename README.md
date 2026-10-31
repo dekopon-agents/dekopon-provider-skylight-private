@@ -7,10 +7,10 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its eighteen ordered capabilities are independently grantable.
-The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes, the
-four list item writes and the three list writes are `ExternalWrite`: creates, updates and completes
-are High risk, deletes are Critical. Because they are not
+`dekopon.dev/provider/v1alpha1`. Its twenty-two ordered capabilities are independently grantable.
+The eight reads are Medium-risk and read-only (`ReadOnly`). The fourteen writes are
+`ExternalWrite`: three calendar event writes, four list item writes, three list writes and four
+category writes. Creates, updates and completes are High risk; deletes are Critical. Because they are not
 `ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
 **No write is granted or bound in any deployment, and whether Skylight accepts a write made with
 the broker's token is unverified: no live write has been made.** Requests default to
@@ -36,11 +36,15 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.lists.create` | POST `/frames/{frameId}/lists` | `list`: the returned record, as the list projection; `{"ok":true}` on 204 |
 | `skylight-private.lists.update` | PUT `/frames/{frameId}/lists/{listId}` | `list`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.lists.delete` | DELETE `/frames/{frameId}/lists/{listId}` (the list and its items) | `list` when a record is returned; `{"ok":true}` on 204 |
+| `skylight-private.categories.create` | POST `/frames/{frameId}/categories` | `category`: the returned record, as the categories projection; `{"ok":true}` on 204 |
+| `skylight-private.categories.find-or-create` | POST `/frames/{frameId}/categories/find_or_create` | `category`: the found or created record; `{"ok":true}` on 204 |
+| `skylight-private.categories.update` | PATCH `/frames/{frameId}/categories/{categoryId}` | `category`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.categories.delete` | DELETE `/frames/{frameId}/categories/{categoryId}[?reassign_to_id={categoryId}]` | `category` when a record is returned; `{"ok":true}` on 204 |
 
 The reads' routes are GETs.
 
-The manifest description is `Unsupported private Skylight household reads and calendar event, list
-and list item writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
+The manifest description is `Unsupported private Skylight household reads and calendar event, list,
+list item and category writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
 `skylight`. Original account/frames inputs and outputs are unchanged.
 
 ## Owner base URL
@@ -66,10 +70,11 @@ The broker remains the destination-policy boundary: configure `allowedHosts` and
 `tests/cassettes/skylight-private/0001-GET-calendar-events.json` is an **authored synthetic
 cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
 cases. `0002-POST-calendar-events.json` through `0004-DELETE-calendar-event.json` (event writes)
-`0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes) and
-`0009-POST-lists.json` through `0011-DELETE-list.json` (list writes) are authored synthetic write
-exchanges (labelled `provenance:
-synthetic`); none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
+`0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes),
+`0009-POST-lists.json` through `0011-DELETE-list.json` (list writes) and
+`0016-POST-categories.json` through `0019-DELETE-category.json` (category writes) are authored
+synthetic write exchanges. Numbers 0012-0015 are reserved for the task writes, which are not built.
+All of them are labelled `provenance: synthetic`, and none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
 or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
 native request seam, and replays the same response through the real component. The component
 harness's host match alone is not used as proof of path/query correctness. Both require no vendor
@@ -97,9 +102,13 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `list-create --frame ID --label TEXT [--color COLOR] [--kind shopping\|to_do]` | `frameId`, `label`; optional `color`, `kind` |
 | `list-update --frame ID --list ID [--label TEXT] [--color COLOR] [--kind shopping\|to_do]` | `frameId`, `listId` and at least one optional field |
 | `list-delete --frame ID --list ID` | `frameId`, `listId` |
+| `category-add --frame ID --label TEXT --color COLOR` | `frameId`, `label`, `color` |
+| `category-find-or-create --frame ID --label TEXT --color COLOR` | `frameId`, `label`, `color` |
+| `category-update --frame ID --category ID [--label TEXT] [--color COLOR]` | `frameId`, `categoryId` and at least one optional field |
+| `category-delete --frame ID --category ID [--reassign-to ID]` | `frameId`, `categoryId`; optional `reassignToId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
-Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
+Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `event-add`'s `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
 `--flag=value`, implicit frame, per-command help, stdin JSON, or transport escape hatch is accepted.
 Unknown/missing/duplicate flags and invalid values return a fixed sanitized usage error, exit 2.
 Piped input is ignored. Every input schema has `additionalProperties:false`; duplicate wire JSON
@@ -107,7 +116,7 @@ members fail closed. Account/frames still reject every selector and flag. The SD
 remains off. Proposals undergo the same constraint/Cedar/broker authorization as direct invocation;
 parsing never grants authority or contacts HTTP.
 
-Frame/list/event/item selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
+Frame/list/event/item/category selectors (including `reassignToId`) must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
 query delimiters and control characters are rejected. Query values are percent-encoded (including
 `/` in timezones and `+` in `Etc/GMT+5`). No URL, method, arbitrary include, page, cursor, header, body, token,
 assignee or completion selector is accepted. Unknown capability takes precedence over invalid JSON.
@@ -158,6 +167,18 @@ Inputs are bounded as follows:
 
 pyskylight's `hide_from_frame` is not offered, because the read side reports a different flag
 (`hide_on_device`). Neither is its `extra` passthrough.
+
+### Category writes
+
+Categories carry family-member linkage on the read side, so these writes change what other reads
+show.
+
+- `category-add` and `category-find-or-create` both require `label` and `color`, with the list
+  rules. Find-or-create returns the existing category of that label, or creates one.
+- `category-update` sends a PATCH with either field, and must name at least one.
+- `category-delete` sends no body. Its optional `reassignToId` is a bounded selector and becomes
+  `?reassign_to_id=…`. That is the only query string any write sends, and it is never caller text.
+- pyskylight's `extra` passthrough is not offered.
 
 ### Calendar boundaries and interpretation
 
@@ -242,7 +263,7 @@ user-agent: dekopon-skylight-private-provider/0.1 (+https://github.com/dekopon-a
 skylight-api-version: 2026-05-01
 ```
 
-A write sends its capability's fixed method (POST, PUT or DELETE) with the same three headers,
+A write sends its capability's fixed method (POST, PUT, PATCH or DELETE) with the same three headers,
 then `content-type: application/json`. DELETE sends that header too, with an empty body. Whether
 Skylight's write endpoints require the API-version header is unverified. The legacy user-agent is
 intentionally retained. Skylight serves `include_up_for_grabs=true` chores only to requests that
@@ -400,8 +421,9 @@ read” is a source classification, not a safety grant. Actions include mutation
 and uploads; even sensitive GET helpers are not ordinary household reads. The only mutations
 implemented are the three calendar event writes (`event-add`, `event-update`, `event-delete`) and
 the four list item writes (`list-add`, `list-item-update`, `list-item-complete`,
-`list-item-delete`) and the three list writes (`list-create`, `list-update`, `list-delete`). They
-are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
+`list-item-delete`), the three list writes (`list-create`, `list-update`, `list-delete`) and
+the four category writes (`category-add`, `category-find-or-create`, `category-update`,
+`category-delete`). They are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
 unverified. No other mutation, no auth command and no sensitive helper is implemented. Tasks is now supported through the browser-verified chores
 route, not an extra Python registration. All names below are Python registrations, not aliases.
 
@@ -458,10 +480,10 @@ list index and populated detail included items were browser-observed. Every test
 | `list-items-delete` | Action | Not implemented; out of scope |
 | `list-item-move` | Action | Not implemented; out of scope |
 | `list-items-section` | Action | Not implemented; out of scope |
-| `category-add` | Action | Not implemented; out of scope |
-| `category-find-or-create` | Action | Not implemented; out of scope |
-| `category-update` | Action | Not implemented; out of scope |
-| `category-delete` | Action | Not implemented; out of scope |
+| `category-add` | Action | Partial: `category-add` → `categories.create`; label and color; no extra; ungranted, live acceptance unverified |
+| `category-find-or-create` | Action | Partial: `category-find-or-create` → `categories.find-or-create`; ungranted, live acceptance unverified |
+| `category-update` | Action | Partial: `category-update` → `categories.update` (PATCH); label, color; ungranted, live acceptance unverified |
+| `category-delete` | Action | Partial: `category-delete` → `categories.delete`; optional bounded `--reassign-to`; ungranted, live acceptance unverified |
 | `plan-instances` | Read | Not implemented; out of scope |
 | `plan-instance-update` | Action | Not implemented; out of scope |
 | `calendars` | Read | Not implemented; out of scope |

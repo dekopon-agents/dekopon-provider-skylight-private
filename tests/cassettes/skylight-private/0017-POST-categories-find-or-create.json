@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B5 category writes, never recorded against Skylight",
+  "capability": "skylight-private.categories.find-or-create",
+  "input": {"frameId": "frame-test", "label": "Synthetic swim", "color": "#1E88E5"},
+  "request": {
+    "method": "POST",
+    "path": "/api/frames/frame-test/categories/find_or_create",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"label": "Synthetic swim", "color": "#1E88E5"}}
+  },
+  "response": {
+    "status": 200,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "category-synthetic", "type": "category", "attributes": {"label": "Synthetic swim", "color": "#1E88E5", "linked_to_profile": false}}}}
+  }
+}
