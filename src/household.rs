@@ -1512,8 +1512,6 @@ struct Attributes {
     body: LenientText,
 }
 
-/// Media text whose source type is unverified: a string is kept, anything else reads as absent.
-/// This keeps the media reads from failing other resources' attributes of the same name.
 #[derive(Default)]
 struct LenientText(Option<String>);
 impl<'de> Deserialize<'de> for LenientText {
@@ -1550,6 +1548,9 @@ impl Attributes {
         ]
         .iter()
         .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
+            || [&self.caption, &self.title, &self.body]
+                .iter()
+                .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
     }
     fn validate(&self) -> Result<bool, ProviderError> {
         for value in [
@@ -2065,8 +2066,17 @@ fn project(
         Some(r) => (
             r.selected
                 .into_values()
-                .map(|r| r.fields(ProjectionKind::Included))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|r| {
+                    let mut record = r.fields(ProjectionKind::Included)?;
+                    if matches!(kind, ProjectionKind::Media) {
+                        record
+                            .as_object_mut()
+                            .expect("typed projection object")
+                            .retain(|key, _| key == "id" || key == "type");
+                    }
+                    Ok(record)
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?,
             r.total,
             r.text_truncated,
         ),

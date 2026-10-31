@@ -1935,3 +1935,81 @@ fn media_projections_keep_ids_and_text_and_never_forward_media_urls() {
         );
     }
 }
+
+#[test]
+fn media_reads_project_included_resources_as_type_and_id_only() {
+    let body = json!({
+        "data": [{"id": "message-1", "type": "message", "attributes": {"caption": "Synthetic"}}],
+        "included": [
+            {"type": "category", "id": "category-7", "attributes": {"label": "category-label-sentinel", "color": "#123456", "linked_to_profile": true}},
+            {"type": "avatar", "id": "avatar-7", "attributes": {"name": "avatar-name-sentinel", "kind": "avatar-kind-sentinel"}},
+            {"type": "list_item", "id": "item-7", "attributes": {"label": "item-label-sentinel", "status": "pending", "section": "section-sentinel"}, "relationships": {"list": {"data": {"type": "list", "id": "list-7"}}}}
+        ]
+    });
+    for read in MEDIA_READS {
+        let single = matches!(read, Read::Message | Read::MonthInReview);
+        let mut body = body.clone();
+        if single {
+            body["data"] = body["data"][0].clone();
+        }
+        let output = invoke(read, body).unwrap();
+        let included = output["included"].as_array().unwrap();
+        assert_eq!(included.len(), 3, "{read:?}");
+        for record in included {
+            let keys: Vec<_> = record
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, ["id", "type"], "{read:?}: {record}");
+        }
+        let rendered = output.to_string();
+        for sentinel in [
+            "label-sentinel",
+            "#123456",
+            "avatar-name-sentinel",
+            "avatar-kind-sentinel",
+            "section-sentinel",
+            "list-7",
+        ] {
+            assert!(!rendered.contains(sentinel), "{read:?} leaked {sentinel}");
+        }
+    }
+    // Household reads keep their typed included attributes.
+    let lists = invoke(
+        Read::Lists,
+        json!({"data": [], "included": [{"type": "category", "id": "category-7", "attributes": {"label": "Kept"}}]}),
+    )
+    .unwrap();
+    assert_eq!(lists["included"][0]["label"], "Kept");
+}
+
+#[test]
+fn truncated_media_text_marks_the_record_and_the_output_truncated() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    for field in ["caption", "title", "body"] {
+        let record = json!({"id": "message-1", "attributes": {field: long}});
+        let many = invoke(Read::Messages, json!({"data": [record]})).unwrap();
+        assert_eq!(many["messages"][0]["textTruncated"], true, "{field}");
+        assert_eq!(many["messages"][0]["truncated"], true, "{field}");
+        assert_eq!(many["truncated"], true, "{field}");
+        assert!(
+            many["messages"][0][field]
+                .as_str()
+                .unwrap()
+                .ends_with(NAME_TRUNCATION_MARKER)
+        );
+        let one = invoke(Read::Message, json!({"data": record})).unwrap();
+        assert_eq!(one["message"]["textTruncated"], true, "{field}");
+        assert_eq!(one["message"]["truncated"], true, "{field}");
+        assert_eq!(one["truncated"], true, "{field}");
+    }
+    let exact = invoke(
+        Read::Messages,
+        json!({"data": [{"id": "message-1", "attributes": {"caption": "x".repeat(MAX_NAME_BYTES)}}]}),
+    )
+    .unwrap();
+    assert_eq!(exact["messages"][0]["truncated"], false);
+    assert_eq!(exact["truncated"], false);
+}
