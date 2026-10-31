@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B3 list writes, never recorded against Skylight",
+  "capability": "skylight-private.lists.delete",
+  "input": {"frameId": "frame-test", "listId": "list-synthetic"},
+  "request": {
+    "method": "DELETE",
+    "path": "/api/frames/frame-test/lists/list-synthetic",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": null
+  },
+  "response": {
+    "status": 204,
+    "headers": {},
+    "body": null
+  }
+}

@@ -698,6 +698,113 @@ fn present_position<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option
     u64::deserialize(deserializer).map(Some)
 }
 
+// List writes: INVENTORY rows 35-37. `hide_from_frame` stays out: the read side knows
+// `hide_on_device`, so the two disagree. `kind` takes pyskylight's documented values.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ListCreateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    label: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 32),
+        regex(pattern = "^[A-Za-z0-9#_-]+$")
+    )]
+    color: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["shopping", "to_do"]))]
+    kind: Option<String>,
+}
+impl ListCreateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        label: String,
+        color: Option<String>,
+        kind: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            label,
+            color,
+            kind,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 3))]
+pub struct ListUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    list_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    label: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 32),
+        regex(pattern = "^[A-Za-z0-9#_-]+$")
+    )]
+    color: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["shopping", "to_do"]))]
+    kind: Option<String>,
+}
+impl ListUpdateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        list_id: String,
+        label: Option<String>,
+        color: Option<String>,
+        kind: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            list_id,
+            label,
+            color,
+            kind,
+        }
+    }
+}
+
+/// The fixed list body, in pyskylight's field order.
+#[derive(Default, Serialize)]
+struct ListBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'a str>,
+}
+
 /// The fixed list item body, in pyskylight's field order.
 #[derive(Default, Serialize)]
 struct ItemBody<'a> {
@@ -722,10 +829,13 @@ pub(crate) enum Mutation {
     ItemUpdate,
     ItemComplete,
     ItemDelete,
+    ListCreate,
+    ListUpdate,
+    ListDelete,
 }
 
 #[cfg(test)]
-pub(crate) const WRITES: [Mutation; 7] = [
+pub(crate) const WRITES: [Mutation; 10] = [
     Mutation::EventCreate,
     Mutation::EventUpdate,
     Mutation::EventDelete,
@@ -733,6 +843,9 @@ pub(crate) const WRITES: [Mutation; 7] = [
     Mutation::ItemUpdate,
     Mutation::ItemComplete,
     Mutation::ItemDelete,
+    Mutation::ListCreate,
+    Mutation::ListUpdate,
+    Mutation::ListDelete,
 ];
 
 impl Mutation {
@@ -746,6 +859,9 @@ impl Mutation {
             Self::ItemUpdate => "skylight-private.list.items.update",
             Self::ItemComplete => "skylight-private.list.items.complete",
             Self::ItemDelete => "skylight-private.list.items.delete",
+            Self::ListCreate => "skylight-private.lists.create",
+            Self::ListUpdate => "skylight-private.lists.update",
+            Self::ListDelete => "skylight-private.lists.delete",
         }
     }
 
@@ -757,9 +873,11 @@ impl Mutation {
     #[cfg(test)]
     pub(crate) fn method(self) -> &'static str {
         match self {
-            Self::EventCreate | Self::ItemCreate => method::POST,
-            Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete => method::PUT,
-            Self::EventDelete | Self::ItemDelete => method::DELETE,
+            Self::EventCreate | Self::ItemCreate | Self::ListCreate => method::POST,
+            Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete | Self::ListUpdate => {
+                method::PUT
+            }
+            Self::EventDelete | Self::ItemDelete | Self::ListDelete => method::DELETE,
         }
     }
 
@@ -789,6 +907,9 @@ impl Mutation {
             ),
             Self::ItemComplete => (&["frameId", "listId", "itemId"], &["status"]),
             Self::ItemDelete => (&["frameId", "listId", "itemId"], &[]),
+            Self::ListCreate => (&["frameId", "label"], &["color", "kind"]),
+            Self::ListUpdate => (&["frameId", "listId"], &["label", "color", "kind"]),
+            Self::ListDelete => (&["frameId", "listId"], &[]),
         }
     }
 
@@ -801,8 +922,10 @@ impl Mutation {
             .keys()
             .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
             || required.iter().any(|key| !object.contains_key(*key))
-            || (matches!(self, Self::EventUpdate | Self::ItemUpdate)
-                && !optional.iter().any(|key| object.contains_key(*key)))
+            || (matches!(
+                self,
+                Self::EventUpdate | Self::ItemUpdate | Self::ListUpdate
+            ) && !optional.iter().any(|key| object.contains_key(*key)))
         {
             return Err(invalid_household_input());
         }
@@ -816,7 +939,27 @@ impl Mutation {
             safe_segment(value)?;
             Ok::<_, ProviderError>(value)
         };
+        let checked = |key: &str, valid: fn(&str) -> bool| match text(key)? {
+            Some(value) if !valid(value) => Err(invalid_household_input()),
+            value => Ok(value),
+        };
         let frame = selector("frameId")?;
+        if let Self::ListCreate | Self::ListUpdate | Self::ListDelete = self {
+            let base = format!("{FRAMES_URI}/{frame}/lists");
+            let path = match self {
+                Self::ListCreate => base,
+                _ => format!("{base}/{}", selector("listId")?),
+            };
+            if self == Self::ListDelete {
+                return Ok((path, None));
+            }
+            let body = ListBody {
+                label: checked("label", valid_summary)?,
+                color: checked("color", valid_color)?,
+                kind: checked("kind", |kind| LIST_KINDS.contains(&kind))?,
+            };
+            return Ok((path, Some(encode(&body)?)));
+        }
         if let Self::ItemCreate | Self::ItemUpdate | Self::ItemComplete | Self::ItemDelete = self {
             let base = format!(
                 "{FRAMES_URI}/{frame}/lists/{}/list_items",
@@ -894,10 +1037,6 @@ impl Mutation {
             }
             Some(_) => Err(invalid_household_input()),
         };
-        let checked = |key: &str, valid: fn(&str) -> bool| match text(key)? {
-            Some(value) if !valid(value) => Err(invalid_household_input()),
-            value => Ok(value),
-        };
         let body = EventBody {
             summary: checked("summary", valid_summary)?,
             starts_at: checked("startsAt", valid_event_time)?,
@@ -951,9 +1090,22 @@ impl Mutation {
             Self::ItemCreate | Self::ItemUpdate | Self::ItemComplete | Self::ItemDelete => {
                 project(body, "item", true, ProjectionKind::Item)
             }
+            Self::ListCreate | Self::ListUpdate | Self::ListDelete => {
+                project(body, "list", true, ProjectionKind::List)
+            }
         };
         Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }
+}
+
+const LIST_KINDS: [&str; 2] = ["shopping", "to_do"];
+
+/// A color token: 1-32 ASCII letters, digits, `#`, `_` or `-` (a hex code or a palette name).
+fn valid_color(value: &str) -> bool {
+    (1..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"#_-".contains(&b))
 }
 
 const ITEM_COMPLETED: &str = "completed";
