@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use dekopon_broker_host::{BrokerHostError, HostCallRejection};
+use dekopon_http_host::PolicyViolation;
 use dekopon_provider_sdk::{
     CommandRunOutcome,
     provider::{self, Response},
@@ -528,7 +530,13 @@ fn real_component_refuses_ephemeral_fixture_authority_before_http() -> TestResul
         let Err(HarnessError::Invocation(failure)) = harness.call(ACCOUNT, json!({})) else {
             panic!("fixed private URI must not reach the ephemeral fixture");
         };
-        assert!(format!("{:?}", failure.error).contains("HostCallRejected"));
+        assert!(matches!(
+            failure.error.as_ref(),
+            BrokerHostError::HostCallRejected {
+                reason: HostCallRejection::Http(PolicyViolation::Denied),
+                ..
+            }
+        ));
         assert!(failure.http_calls.is_empty());
     }
     Ok(())

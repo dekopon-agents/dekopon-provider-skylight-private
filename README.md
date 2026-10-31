@@ -55,7 +55,7 @@ providerSettings:
 ```
 
 Every route appends `/api/...` to this base, preserving a configured path prefix and encoded
-query values. SDK 0.38.0 validates the base as HTTP or HTTPS with a host and no userinfo, query,
+query values. SDK 0.75.0 validates the base as HTTP or HTTPS with a host and no userinfo, query,
 fragment or whitespace. Malformed settings and unknown keys fail before HTTP. Omitted settings
 or an empty settings object keep the default. Model inputs and CLI flags cannot set an origin.
 
@@ -565,7 +565,7 @@ list index and populated detail included items were browser-observed. Every test
 ## Build and verification
 
 The only compiler provenance is exact Rust 1.98.1. Component composition uses exact `wasm-tools`
-1.259.0. The SDK, testkit, and broker crates are pinned to published core 0.38.0.
+1.259.0. The SDK, testkit, and broker crates are pinned to published core 0.75.0.
 The SDK owns the provider world and stdio bindings; this repository keeps no WIT mirror.
 The buffered HTTP import is `dekopon:http/client@1.1.0`; no HTTP 1.2 import is used.
 
@@ -581,8 +581,8 @@ DEKOPON_PROVIDER_COMPONENT=$PWD/skylight-private-provider.wasm \
 This mirrors the gates `ci / validate` in
 [`dekopon-agents/provider-workflows`](https://github.com/dekopon-agents/provider-workflows) runs:
 formatting, dependency policy, clippy for the host and for `wasm32-unknown-unknown`,
-the component build, component validation, the SBOM, and a byte-for-byte
-rebuild from a clean checkout. There is no local `scripts/` directory or `build.sh` in this
+the component build, component validation and the SBOM. Its byte-for-byte rebuild from a
+clean checkout is paused in provider-workflows; `build.sh` itself is unchanged and reproducible. There is no local `scripts/` directory or `build.sh` in this
 repository anymore; `../provider-workflows/build.sh` is a sibling checkout of the shared
 workflows repository (see its own README for the exact clone step CI uses).
 
