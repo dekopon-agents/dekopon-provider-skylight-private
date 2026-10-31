@@ -13,8 +13,8 @@ use dekopon_broker_host::{
     BrokerInvocationOutput, BrokerProviderRegistry, Streams, TestImports, asset::AssetInputs,
 };
 use dekopon_capability::{
-    AuthorizedInvocation, ExecutionConstraints, HttpConstraints, ProposedInvocation,
-    broker::AuthorizationGate,
+    AuthorizedInvocation, ChatSlotValues, ExecutionConstraints, HttpConstraints,
+    ProposedInvocation, broker::AuthorizationGate,
 };
 use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, Redacted, TraceId};
 use dekopon_http_host::LoopbackHttpsPin;
@@ -90,6 +90,8 @@ fn grant(authority: &str, method: &str, bytes: u64) -> ExecutionConstraints {
             max_response_bytes: 262_144,
             allow_plaintext_loopback: false,
             propagate_trace: false,
+            request_templates: Vec::new(),
+            signed_download: None,
         }),
         ..ExecutionConstraints::default()
     }
@@ -116,7 +118,8 @@ fn authorized(
             "skylight-private".parse().unwrap(),
             "skylight-test-decision".to_owned(),
             "skylight-test-broker".parse::<PrincipalId>().unwrap(),
-            "skylight-test-policy".to_owned(),
+            // 0.75.0 requires a 64-hex-digit policy digest; a synthetic one, as the testkit uses.
+            "a".repeat(64),
             constraints,
         )
         .unwrap()
@@ -183,7 +186,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
                 .await
                 .unwrap_err();
             assert!(
-                matches!(failure.error.as_ref(), BrokerHostError::HostCallRejected { reason: actual, .. } if *actual == reason),
+                matches!(failure.error.as_ref(), BrokerHostError::HostCallRejected { reason: actual, .. } if actual.label() == reason),
                 "{capability}: {:?}",
                 failure.error
             );
@@ -208,13 +211,13 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
                     .unwrap(),
             ),
             settings: Some(json!({"baseUrl":format!("https://{authority}/skylight")}).to_string()),
+            credential: Some(credential),
             ..TestImports::default()
         };
         let failure = registry
             .invoke_with_test_imports(
                 authorized(capability, input, grant(&authority, "GET", 4096)),
-                Some(credential),
-                None,
+                ChatSlotValues::default(),
                 AssetInputs::default(),
                 Some(&imports),
             )
@@ -223,10 +226,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
         assert!(
             matches!(
                 failure.error.as_ref(),
-                BrokerHostError::HostCallRejected {
-                    reason: "denied",
-                    ..
-                }
+                BrokerHostError::HostCallRejected { reason, .. } if reason.label() == "denied"
             ),
             "{capability}: {:?}",
             failure.error
@@ -399,8 +399,7 @@ async fn invoke_loopback(
     let result = registry
         .invoke_with_test_imports(
             authorized(capability, input, constraints),
-            None,
-            None,
+            ChatSlotValues::default(),
             AssetInputs {
                 streams: Some(Streams {
                     stdin: None,
@@ -507,10 +506,7 @@ async fn smoke_the_built_component_posts_the_exact_event_body_and_a_get_only_gra
     assert!(
         matches!(
             failure.error.as_ref(),
-            BrokerHostError::HostCallRejected {
-                reason: "denied",
-                ..
-            }
+            BrokerHostError::HostCallRejected { reason, .. } if reason.label() == "denied"
         ),
         "{:?}",
         failure.error
@@ -551,10 +547,7 @@ async fn each_write_runs_only_under_its_exact_method_and_never_under_a_get_only_
             assert!(
                 matches!(
                     failure.error.as_ref(),
-                    BrokerHostError::HostCallRejected {
-                        reason: "denied",
-                        ..
-                    }
+                    BrokerHostError::HostCallRejected { reason, .. } if reason.label() == "denied"
                 ),
                 "{capability} under {other}: {:?}",
                 failure.error
