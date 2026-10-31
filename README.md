@@ -44,7 +44,6 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.tasks.update` | PUT `/frames/{frameId}/chores/{taskId}` | `task`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.tasks.complete` | PUT `/frames/{frameId}/chores/{taskId}/completions` | `task`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.tasks.delete` | DELETE `/frames/{frameId}/chores/{taskId}` | `task` when a record is returned; `{"ok":true}` on 204 |
-
 | `skylight-private.messages.list` | `/frames/{frameId}/messages` (first page only) | `messages`: IDs, captions, created times, linkage; never media URLs |
 | `skylight-private.messages.read` | `/frames/{frameId}/messages/{messageId}` | `message`: the same fields for one message |
 | `skylight-private.messages.likes.list` | `/frames/{frameId}/messages/{messageId}/all_likes` | `likes`: IDs, created times, linkage |
@@ -593,29 +592,29 @@ list index and populated detail included items were browser-observed. Every test
 | `reward-points` | Read | Not implemented; out of scope |
 | `reward-points-set` | Action | Not implemented; out of scope |
 | `messages` | Read | Partial: `messages` → `messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `message` | Read | Partial: `message` → `messages.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message` | Read | Partial: `message` → `messages.read`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-delete` | Action | Not implemented; out of scope |
 | `messages-delete` | Action | Not implemented; out of scope |
 | `messages-copy` | Action | Not implemented; out of scope |
 | `message-caption` | Action | Not implemented; out of scope |
-| `message-likes` | Read | Partial: `message-likes` → `messages.likes.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message-likes` | Read | Partial: `message-likes` → `messages.likes.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-like` | Action | Not implemented; out of scope |
 | `message-unlike` | Action | Not implemented; out of scope |
-| `message-comments` | Read | Partial: `message-comments` → `messages.comments.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message-comments` | Read | Partial: `message-comments` → `messages.comments.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-comment-add` | Action | Not implemented; out of scope |
 | `message-comment-delete` | Action | Not implemented; out of scope |
 | `photo-upload` | Action | Not implemented; out of scope |
 | `upload-credentials` | Sensitive GET helper | Not implemented; out of scope |
-| `albums` | Read | Partial: `albums` → `albums.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `albums` | Read | Partial: `albums` → `albums.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `album-add` | Action | Not implemented; out of scope |
 | `album-update` | Action | Not implemented; out of scope |
 | `album-delete` | Action | Not implemented; out of scope |
-| `album-messages` | Read | Partial: `album-messages` → `albums.messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `album-message-ids` | Read | Partial: `album-message-ids` → `albums.message-ids.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `album-messages` | Read | Partial: `album-messages` → `albums.messages.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
+| `album-message-ids` | Read | Partial: `album-message-ids` → `albums.message-ids.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `album-add-photos` | Action | Not implemented; out of scope |
 | `album-remove-photos` | Action | Not implemented; out of scope |
-| `month-in-review` | Read | Partial: `month-in-review` → `month-in-review.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `month-in-reviews` | Read | Partial: `month-in-reviews` → `month-in-review.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `month-in-review` | Read | Partial: `month-in-review` → `month-in-review.read`; typed IDs/text/linkage, never media URLs; response shape unverified |
+| `month-in-reviews` | Read | Partial: `month-in-reviews` → `month-in-review.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `avatars` | Read | Not implemented; out of scope |
 | `colors` | Read | Not implemented; out of scope |
 | `activities` | Read | Not implemented; out of scope |
