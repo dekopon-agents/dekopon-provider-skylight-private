@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B1 event writes, never recorded against Skylight",
+  "capability": "skylight-private.calendar.events.create",
+  "input": {"frameId": "frame-test", "summary": "Synthetic dentist", "startsAt": "2028-03-11T09:00:00-05:00", "endsAt": "2028-03-11T10:00:00-05:00", "timezone": "America/New_York", "categoryIds": ["category-synthetic"]},
+  "request": {
+    "method": "POST",
+    "path": "/api/frames/frame-test/calendar_events",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"summary": "Synthetic dentist", "starts_at": "2028-03-11T09:00:00-05:00", "ends_at": "2028-03-11T10:00:00-05:00", "timezone": "America/New_York", "category_ids": ["category-synthetic"]}}
+  },
+  "response": {
+    "status": 201,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "event-synthetic", "type": "calendar_event", "attributes": {"summary": "Synthetic dentist", "starts_at": "2028-03-11T09:00:00-05:00", "ends_at": "2028-03-11T10:00:00-05:00", "timezone": "America/New_York", "all_day": false}}}}
+  }
+}

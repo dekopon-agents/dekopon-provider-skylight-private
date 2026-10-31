@@ -3,7 +3,8 @@
 This provider performs no OAuth. It never sees an access token, a refresh token, a seed, or a
 record. The Dekopon broker owns all of it: it keeps the OAuth record, refreshes it, rotates the
 refresh token while the provider is idle, adopts a new seed, seals a dead token family, and injects
-`Authorization: Bearer …` into the one GET this provider builds.
+`Authorization: Bearer …` into the one request this provider builds: a GET for a read, or a
+write's fixed method. No write is bound in any deployment.
 
 The existing provider artifact works unchanged. There is no provider setting, rebuild or release for
 this path. The broker side needs core `dekopon-brokerd` v0.48.0 and Helm chart 0.35.0:
@@ -25,7 +26,7 @@ The broker contract is in core and is not repeated here:
 
 | | Provider (guest) | Broker |
 |---|---|---|
-| Request | Builds one fixed GET to `app.ourskylight.com`; never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
+| Request | Builds one fixed request to `app.ourskylight.com` (GET for reads; POST, PUT or DELETE for the calendar event writes); never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
 | Which secret | Proposes none: no `secretUse`, no DRN, no `--secret` operand | Attaches the capability's owner-authored `defaultSecretUse` when the proposal names no secret |
 | Authority | None | Capability decision, a separate Cedar `secret.use` decision on the exact DRN, and the private binding must all allow |
 | OAuth | None: no login, refresh, token cache, rotation, expiry, seed or record | `oauth2Refresh`: record lock, bare refresh-token grant, atomic rotation, scheduled idle refresh, seed adoption, sealing |

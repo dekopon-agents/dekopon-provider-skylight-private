@@ -1,9 +1,16 @@
 //! Broker-authorized real-component refusal tests. No call may reach a private host.
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::{Read as _, Write as _},
+    net::TcpListener,
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use dekopon_broker_host::{
-    BoundCredential, BrokerHostError, BrokerHostLimits, BrokerProviderRegistry, TestImports,
-    asset::AssetInputs,
+    BoundCredential, BrokerHostError, BrokerHostLimits, BrokerInvocationFailure,
+    BrokerInvocationOutput, BrokerProviderRegistry, Streams, TestImports, asset::AssetInputs,
 };
 use dekopon_capability::{
     AuthorizedInvocation, ExecutionConstraints, HttpConstraints, ProposedInvocation,
@@ -11,6 +18,7 @@ use dekopon_capability::{
 };
 use dekopon_core::{Actor, AgentId, InvocationId, PrincipalId, Redacted, TraceId};
 use dekopon_http_host::LoopbackHttpsPin;
+use dekopon_provider_sdk::EffectKind;
 use serde_json::{Value, json};
 
 fn limits() -> BrokerHostLimits {
@@ -148,7 +156,14 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
         ),
     ];
     assert_eq!(
-        registry.manifests().next().unwrap().capabilities.len(),
+        registry
+            .manifests()
+            .next()
+            .unwrap()
+            .capabilities
+            .iter()
+            .filter(|capability| capability.effect == EffectKind::ReadOnly)
+            .count(),
         cases.len()
     );
     for (capability, input) in cases {
@@ -224,5 +239,325 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
         assert!(!failure.http_calls[0].credential_injected);
         assert_eq!(failure.http_calls[0].status, None);
         assert!(!format!("{failure:?}").contains("synthetic-credential-sentinel"));
+    }
+}
+
+const EVENTS_TARGET: &str = "/skylight/api/frames/frame-test/calendar_events";
+/// The same bytes the native create test pins (`src/household_tests.rs`).
+const CREATE_BODY: &str = r#"{"summary":"Dentist","starts_at":"2028-03-11T09:00:00-05:00","ends_at":"2028-03-11T10:00:00-05:00","all_day":false,"timezone":"America/New_York","category_ids":["category-1","category-2"],"rrule":["RRULE:FREQ=WEEKLY;COUNT=2"]}"#;
+
+fn create_input() -> Value {
+    json!({
+        "frameId": "frame-test",
+        "summary": "Dentist",
+        "startsAt": "2028-03-11T09:00:00-05:00",
+        "endsAt": "2028-03-11T10:00:00-05:00",
+        "allDay": false,
+        "timezone": "America/New_York",
+        "categoryIds": ["category-1", "category-2"],
+        "rrule": ["RRULE:FREQ=WEEKLY;COUNT=2"]
+    })
+}
+
+fn writes() -> [(&'static str, &'static str, Value, String); 3] {
+    [
+        (
+            "skylight-private.calendar.events.create",
+            "POST",
+            create_input(),
+            EVENTS_TARGET.to_owned(),
+        ),
+        (
+            "skylight-private.calendar.events.update",
+            "PUT",
+            json!({"frameId":"frame-test","eventId":"event-7","summary":"Dentist moved"}),
+            format!("{EVENTS_TARGET}/event-7"),
+        ),
+        (
+            "skylight-private.calendar.events.delete",
+            "DELETE",
+            json!({"frameId":"frame-test","eventId":"event-7"}),
+            format!("{EVENTS_TARGET}/event-7"),
+        ),
+    ]
+}
+
+/// One request exactly as the loopback consumer received it.
+struct Captured {
+    request_line: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// A plaintext loopback consumer that keeps the complete request and answers one fixed response.
+/// The broker reaches it only under `allow_plaintext_loopback`; the guest's bytes do not depend on
+/// the scheme, which comes from the owner `baseUrl` setting.
+fn loopback_consumer(
+    status: &'static str,
+    body: &'static str,
+) -> (TcpListener, JoinHandle<Captured>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let server = listener.try_clone().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = server.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut chunk = [0; 4096];
+        let head_end = loop {
+            let read = stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "request ended before its headers");
+            bytes.extend_from_slice(&chunk[..read]);
+            if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                break end;
+            }
+        };
+        let head = String::from_utf8(bytes[..head_end].to_vec()).unwrap();
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next().unwrap().to_owned();
+        let headers: Vec<(String, String)> = lines
+            .map(|line| {
+                let (name, value) = line.split_once(':').unwrap();
+                (name.trim().to_ascii_lowercase(), value.trim().to_owned())
+            })
+            .collect();
+        let length = headers
+            .iter()
+            .find(|(name, _)| name == "content-length")
+            .map_or(0, |(_, value)| value.parse::<usize>().unwrap());
+        let mut body_bytes = bytes[head_end + 4..].to_vec();
+        while body_bytes.len() < length {
+            let read = stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "request ended before its body");
+            body_bytes.extend_from_slice(&chunk[..read]);
+        }
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        Captured {
+            request_line,
+            headers,
+            body: body_bytes,
+        }
+    });
+    (listener, handle)
+}
+
+fn loopback_grant(port: u16, method: &str) -> ExecutionConstraints {
+    let mut constraints = grant(&format!("127.0.0.1:{port}"), method, 4096);
+    constraints.http.as_mut().unwrap().allow_plaintext_loopback = true;
+    constraints
+}
+
+/// Invokes the built component with captured stdout, as the broker would for an agent.
+async fn invoke_loopback(
+    registry: &BrokerProviderRegistry,
+    capability: &str,
+    input: Value,
+    constraints: ExecutionConstraints,
+    port: u16,
+) -> (
+    Result<BrokerInvocationOutput, BrokerInvocationFailure>,
+    Vec<u8>,
+) {
+    let (host_end, mut reader) = UnixStream::pair().unwrap();
+    let stdout = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let imports = TestImports {
+        settings: Some(json!({"baseUrl":format!("http://127.0.0.1:{port}/skylight")}).to_string()),
+        ..TestImports::default()
+    };
+    let result = registry
+        .invoke_with_test_imports(
+            authorized(capability, input, constraints),
+            None,
+            None,
+            AssetInputs {
+                streams: Some(Streams {
+                    stdin: None,
+                    stdout: host_end.into(),
+                }),
+                ..AssetInputs::default()
+            },
+            Some(&imports),
+        )
+        .await;
+    (result, stdout.join().unwrap())
+}
+
+fn assert_no_connection(listener: &TcpListener) {
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "the consumer saw a connection"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn smoke_the_built_component_posts_the_exact_event_body_and_a_get_only_grant_refuses_it() {
+    let registry = BrokerProviderRegistry::load([component()], limits())
+        .await
+        .unwrap();
+    let capability = "skylight-private.calendar.events.create";
+    let (listener, consumer) = loopback_consumer(
+        "201 Created",
+        r#"{"data":{"id":"event-synthetic","type":"calendar_event","attributes":{"summary":"Dentist"}}}"#,
+    );
+    let port = listener.local_addr().unwrap().port();
+    let (result, stdout) = invoke_loopback(
+        &registry,
+        capability,
+        create_input(),
+        loopback_grant(port, "POST"),
+        port,
+    )
+    .await;
+    let output = result.expect("a POST-only grant accepts the create");
+    let captured = consumer.join().unwrap();
+    assert_no_connection(&listener);
+    assert_eq!(output.http_calls.len(), 1);
+    assert_eq!(output.http_calls[0].method, "POST");
+    assert_eq!(output.http_calls[0].status, Some(201));
+    assert!(!output.http_calls[0].credential_injected);
+    assert_eq!(
+        captured.request_line,
+        format!("POST {EVENTS_TARGET} HTTP/1.1")
+    );
+    for (name, value) in [
+        ("accept", "application/json"),
+        (
+            "user-agent",
+            "dekopon-skylight-private-provider/0.1 (+https://github.com/dekopon-agents/dekopon)",
+        ),
+        ("skylight-api-version", "2026-05-01"),
+        ("content-type", "application/json"),
+    ] {
+        let sent: Vec<_> = captured
+            .headers
+            .iter()
+            .filter(|(header, _)| header == name)
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert_eq!(sent, [value], "{name}");
+    }
+    for denied in ["authorization", "cookie"] {
+        assert!(captured.headers.iter().all(|(name, _)| name != denied));
+    }
+    assert_eq!(
+        String::from_utf8(captured.body.clone()).unwrap(),
+        CREATE_BODY
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&captured.body).unwrap(),
+        json!({
+            "summary": "Dentist",
+            "starts_at": "2028-03-11T09:00:00-05:00",
+            "ends_at": "2028-03-11T10:00:00-05:00",
+            "all_day": false,
+            "timezone": "America/New_York",
+            "category_ids": ["category-1", "category-2"],
+            "rrule": ["RRULE:FREQ=WEEKLY;COUNT=2"]
+        })
+    );
+    let projected: Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(projected["event"]["id"], "event-synthetic");
+
+    // Today's deployment allows GET only: the same call is refused before any HTTP.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (result, _) = invoke_loopback(
+        &registry,
+        capability,
+        create_input(),
+        loopback_grant(port, "GET"),
+        port,
+    )
+    .await;
+    let failure = result.expect_err("a GET-only grant refuses the create");
+    assert!(
+        matches!(
+            failure.error.as_ref(),
+            BrokerHostError::HostCallRejected {
+                reason: "denied",
+                ..
+            }
+        ),
+        "{:?}",
+        failure.error
+    );
+    assert!(failure.http_calls.is_empty());
+    assert_no_connection(&listener);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_write_runs_only_under_its_exact_method_and_never_under_a_get_only_grant() {
+    let registry = BrokerProviderRegistry::load([component()], limits())
+        .await
+        .unwrap();
+    let manifest = registry.manifests().next().unwrap();
+    for (capability, method, input, target) in writes() {
+        let declared = manifest
+            .capabilities
+            .iter()
+            .find(|declared| declared.id.as_str() == capability)
+            .unwrap();
+        assert_eq!(declared.effect, EffectKind::ExternalWrite, "{capability}");
+        for other in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+            if other == method {
+                continue;
+            }
+            let failure = registry
+                .invoke(
+                    authorized(
+                        capability,
+                        input.clone(),
+                        grant("app.ourskylight.com", other, 4096),
+                    ),
+                    None,
+                    AssetInputs::default(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    failure.error.as_ref(),
+                    BrokerHostError::HostCallRejected {
+                        reason: "denied",
+                        ..
+                    }
+                ),
+                "{capability} under {other}: {:?}",
+                failure.error
+            );
+            assert!(failure.http_calls.is_empty(), "{capability} under {other}");
+        }
+        let (listener, consumer) = loopback_consumer("204 No Content", "");
+        let port = listener.local_addr().unwrap().port();
+        let (result, stdout) = invoke_loopback(
+            &registry,
+            capability,
+            input,
+            loopback_grant(port, method),
+            port,
+        )
+        .await;
+        let output = result.unwrap_or_else(|failure| panic!("{capability}: {:?}", failure.error));
+        let captured = consumer.join().unwrap();
+        assert_eq!(output.http_calls.len(), 1);
+        assert_eq!(captured.request_line, format!("{method} {target} HTTP/1.1"));
+        assert!(
+            captured
+                .headers
+                .contains(&("content-type".to_owned(), "application/json".to_owned()))
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&stdout).unwrap(),
+            json!({"ok": true})
+        );
     }
 }

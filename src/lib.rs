@@ -105,7 +105,7 @@ impl Provider for SkylightPrivate {
     const ID: &'static str = "skylight-private";
     const COMMAND_WORDS: &'static [&'static str] = &[COMMAND_WORD];
     const DESCRIPTION: &'static str =
-        "Unsupported private Skylight account and frame reads over broker HTTP";
+        "Unsupported private Skylight household reads and calendar event writes over broker HTTP";
     type Args = commands::Args;
     type Capabilities = (
         Account,
@@ -116,6 +116,9 @@ impl Provider for SkylightPrivate {
         List,
         Items,
         Tasks,
+        EventCreate,
+        EventUpdate,
+        EventDelete,
     );
 
     fn propose(args: Self::Args, _stdin_piped: bool) -> Result<Proposal<Self>, Usage> {
@@ -127,15 +130,43 @@ impl Provider for SkylightPrivate {
 #[serde(deny_unknown_fields)]
 pub struct EmptyInput {}
 
+/// Declares one fixed-route capability. The six-argument form is a read: GET, `ReadOnly`, `Medium`
+/// and no request body. The full form names the method, effect, risk and a typed body builder; a
+/// body builder returning `None` sends no body.
 macro_rules! read_capability {
     ($name:ident, $suffix:literal, $description:literal, $input:ty, $uri:expr, $project:expr) => {
+        read_capability!(
+            $name,
+            $suffix,
+            $description,
+            $input,
+            method::GET,
+            EffectKind::ReadOnly,
+            RiskLevel::Medium,
+            $uri,
+            |_: &Value| Ok(None),
+            $project
+        );
+    };
+    (
+        $name:ident,
+        $suffix:literal,
+        $description:literal,
+        $input:ty,
+        $method:expr,
+        $effect:expr,
+        $risk:expr,
+        $uri:expr,
+        $body:expr,
+        $project:expr
+    ) => {
         pub struct $name;
         impl Capability for $name {
             type Provider = SkylightPrivate;
             const NAME: &'static str = $suffix;
             const DESCRIPTION: &'static str = $description;
-            const EFFECT: EffectKind = EffectKind::ReadOnly;
-            const RISK: RiskLevel = RiskLevel::Medium;
+            const EFFECT: EffectKind = $effect;
+            const RISK: RiskLevel = $risk;
             type Input = $input;
             type Needs = (Settings<SkylightSettings>, Http);
             type Error = ProviderError;
@@ -147,17 +178,26 @@ macro_rules! read_capability {
             ) -> Result<(), Self::Error> {
                 let input = serde_json::to_value(input).map_err(|_| invalid_input())?;
                 let path: String = ($uri)(&input)?;
+                let body: Option<Vec<u8>> = ($body)(&input)?;
                 let uri = settings
                     .into_inner()
                     .base_url
                     .join(&path)
                     .map_err(|_| invalid_request())?;
-                let body = send_once(&uri, |request| http.send(request))?;
-                let output: Value = ($project)(&body)?;
+                let output: Value =
+                    match send_once($method, &uri, body, |request| http.send(request))? {
+                        Some(body) => ($project)(&body)?,
+                        None => no_content_output(),
+                    };
                 write_output(out, &output)
             }
         }
     };
+}
+
+/// A write answered 204 has no record to project.
+fn no_content_output() -> Value {
+    json!({"ok": true})
 }
 
 fn write_output(out: &mut Stdout, output: &Value) -> Result<(), ProviderError> {
@@ -238,6 +278,42 @@ read_capability!(
     |input: &Value| household::Read::Tasks.uri(input),
     |body: &[u8]| household::Read::Tasks.project_body(body)
 );
+read_capability!(
+    EventCreate,
+    "calendar.events.create",
+    "Creates one calendar event from typed bounded fields",
+    household::EventCreateInput,
+    method::POST,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::EventCreate.uri(input),
+    |input: &Value| household::Mutation::EventCreate.body(input),
+    |body: &[u8]| household::Mutation::EventCreate.project_body(body)
+);
+read_capability!(
+    EventUpdate,
+    "calendar.events.update",
+    "Updates typed bounded fields of one calendar event",
+    household::EventUpdateInput,
+    method::PUT,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::EventUpdate.uri(input),
+    |input: &Value| household::Mutation::EventUpdate.body(input),
+    |body: &[u8]| household::Mutation::EventUpdate.project_body(body)
+);
+read_capability!(
+    EventDelete,
+    "calendar.events.delete",
+    "Deletes one calendar event by identifier",
+    household::EventDeleteInput,
+    method::DELETE,
+    EffectKind::ExternalWrite,
+    RiskLevel::Critical,
+    |input: &Value| household::Mutation::EventDelete.uri(input),
+    |input: &Value| household::Mutation::EventDelete.body(input),
+    |body: &[u8]| household::Mutation::EventDelete.project_body(body)
+);
 
 #[allow(unsafe_code)]
 mod export {
@@ -289,7 +365,10 @@ where
         FRAMES_CAPABILITY => list_frames(input, send),
         _ => match household::Read::from_capability(capability.as_str()) {
             Some(read) => read.invoke(input, send),
-            None => Err(unknown_capability()),
+            None => match household::Mutation::from_capability(capability.as_str()) {
+                Some(write) => write.invoke(input, send),
+                None => Err(unknown_capability()),
+            },
         },
     }
 }
@@ -301,11 +380,14 @@ where
 {
     validate_empty_input(input)?;
     let body = send_once(
+        method::GET,
         &DEFAULT_BASE
             .join(ACCOUNT_URI)
             .map_err(|_| invalid_request())?,
+        None,
         send,
-    )?;
+    )?
+    .ok_or_else(invalid_response)?;
     let envelope = decode_account(&body)?;
     validate_id(&envelope.data.0.id)?;
     bounded_output(json!({"account": {"id": envelope.data.0.id}}))
@@ -318,11 +400,14 @@ where
 {
     validate_empty_input(input)?;
     let body = send_once(
+        method::GET,
         &DEFAULT_BASE
             .join(FRAMES_URI)
             .map_err(|_| invalid_request())?,
+        None,
         send,
-    )?;
+    )?
+    .ok_or_else(invalid_response)?;
     let envelope = decode_frames(&body)?;
     project_frames(envelope.data)
 }
@@ -337,24 +422,41 @@ fn validate_empty_input(input: Value) -> Result<(), ProviderError> {
         .map_err(|_| invalid_input())
 }
 
-/// Performs exactly one broker call with a fixed GET request and maps all host detail away.
-fn send_once<F>(uri: &str, send: F) -> Result<Vec<u8>, ProviderError>
+/// Performs exactly one broker call with the capability's fixed method and maps all host detail
+/// away. A GET carries no body and no content-type and succeeds only on 200. A write always
+/// carries `content-type: application/json` (DELETE too, with an empty body) and succeeds on 200
+/// or 201 with the returned record, or on 204, which yields `None`.
+fn send_once<F>(
+    method: &'static str,
+    uri: &str,
+    body: Option<Vec<u8>>,
+    send: F,
+) -> Result<Option<Vec<u8>>, ProviderError>
 where
     F: FnOnce(Request) -> Result<Response, HttpError>,
 {
-    let request = Request::new(method::GET, uri)
+    let write = method != method::GET;
+    let mut request = Request::new(method, uri)
         .map_err(|_| invalid_request())?
         .with_header(header("accept", ACCEPT_JSON)?)
         .with_header(header("user-agent", USER_AGENT)?)
         .with_header(header("skylight-api-version", SKYLIGHT_API_VERSION)?);
+    if write {
+        request = request.with_header(header("content-type", ACCEPT_JSON)?);
+    }
+    if let Some(body) = body {
+        request = request.with_body(body);
+    }
     let response = send(request).map_err(|_| http_failed())?;
-    if response.status != 200 {
-        return Err(status_error(response.status));
+    match (write, response.status) {
+        (_, 200) | (true, 201) => {}
+        (true, 204) => return Ok(None),
+        (_, status) => return Err(status_error(status)),
     }
     if response.body.len() > MAX_RESPONSE_BODY_BYTES {
         return Err(invalid_response());
     }
-    Ok(response.body)
+    Ok(Some(response.body))
 }
 
 fn header(name: &'static str, value: &'static str) -> Result<Header, ProviderError> {
@@ -619,7 +721,7 @@ fn status_error(status: u16) -> ProviderError {
             "reauth-required",
             "the broker credential must be replaced or re-enrolled",
         ),
-        403 => ProviderError::new("forbidden", "Skylight refused this private API read"),
+        403 => ProviderError::new("forbidden", "Skylight refused this private API call"),
         404 => ProviderError::new("not-found", "the private API resource was not found"),
         429 => ProviderError::new("rate-limited", "the private API rate limit was reached"),
         _ => ProviderError::new(
@@ -741,20 +843,32 @@ mod tests {
     }
 
     #[test]
-    fn manifest_preserves_legacy_and_adds_only_approved_medium_reads() {
+    fn manifest_keeps_every_read_read_only_and_every_write_an_external_write() {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 8);
+        let reads: Vec<_> = [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY]
+            .into_iter()
+            .chain(super::household::READS.map(super::household::Read::capability))
+            .collect();
+        let writes = [
+            ("skylight-private.calendar.events.create", RiskLevel::High),
+            ("skylight-private.calendar.events.update", RiskLevel::High),
+            (
+                "skylight-private.calendar.events.delete",
+                RiskLevel::Critical,
+            ),
+        ];
         assert_eq!(
             manifest
                 .capabilities
                 .iter()
                 .map(|capability| capability.id.as_str())
                 .collect::<Vec<_>>(),
-            [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY]
-                .into_iter()
-                .chain(super::household::READS.map(super::household::Read::capability))
+            reads
+                .iter()
+                .copied()
+                .chain(writes.map(|(id, _)| id))
                 .collect::<Vec<_>>()
         );
         let empty_schema = json!({
@@ -762,14 +876,26 @@ mod tests {
             "additionalProperties": false
         });
         for capability in &manifest.capabilities {
-            assert_eq!(capability.effect, EffectKind::ReadOnly);
-            assert_eq!(capability.risk, RiskLevel::Medium);
-            if [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY].contains(&capability.id.as_str()) {
+            let id = capability.id.as_str();
+            if reads.contains(&id) {
+                assert_eq!(capability.effect, EffectKind::ReadOnly, "{id}");
+                assert_eq!(capability.risk, RiskLevel::Medium, "{id}");
+            } else {
+                // Not ReadOnly, so the broker never adds it to `skylight-private:read-only`.
+                assert_eq!(capability.effect, EffectKind::ExternalWrite, "{id}");
+                let (_, risk) = writes.iter().find(|(write, _)| *write == id).unwrap();
+                assert_eq!(capability.risk, *risk, "{id}");
+            }
+            if [ACCOUNT_CAPABILITY, FRAMES_CAPABILITY].contains(&id) {
                 assert_eq!(capability.input_schema, empty_schema);
             }
-            assert!(!capability.id.as_str().contains("write"));
-            assert!(!capability.id.as_str().contains("request"));
-            assert!(!capability.id.as_str().contains("api"));
+            assert_eq!(
+                capability.input_schema["additionalProperties"], false,
+                "{id}"
+            );
+            assert!(!id.contains("write"));
+            assert!(!id.contains("request"));
+            assert!(!id.contains("api"));
         }
     }
 
@@ -1201,12 +1327,9 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 8);
+        assert_eq!(manifest.capabilities.len(), 11);
         for capability in &manifest.capabilities {
             assert!(capability.id.as_str().starts_with("skylight-private."));
-            assert_eq!(capability.effect, EffectKind::ReadOnly);
-            assert_eq!(capability.risk, RiskLevel::Medium);
-            assert_eq!(capability.input_schema["additionalProperties"], false);
         }
     }
 
@@ -1246,7 +1369,7 @@ mod tests {
                 "reauth-required",
                 "the broker credential must be replaced or re-enrolled",
             ),
-            ("forbidden", "Skylight refused this private API read"),
+            ("forbidden", "Skylight refused this private API call"),
             ("not-found", "the private API resource was not found"),
             ("rate-limited", "the private API rate limit was reached"),
             (
