@@ -41,7 +41,7 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     conformance::<SkylightPrivate>(component())?;
     let manifest = provider::manifest::<SkylightPrivate>()?;
     assert_eq!(manifest.id.as_str(), "skylight-private");
-    assert_eq!(manifest.capabilities.len(), 27);
+    assert_eq!(manifest.capabilities.len(), 31);
     let expected_ids = [
         ACCOUNT,
         FRAMES,
@@ -61,6 +61,10 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
         "skylight-private.lists.create",
         "skylight-private.lists.update",
         "skylight-private.lists.delete",
+        "skylight-private.categories.create",
+        "skylight-private.categories.find-or-create",
+        "skylight-private.categories.update",
+        "skylight-private.categories.delete",
         "skylight-private.messages.list",
         "skylight-private.messages.read",
         "skylight-private.messages.likes.list",
@@ -140,6 +144,22 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     assert_eq!(
         manifest.capabilities[17].input_schema["required"],
         json!(["frameId", "listId"])
+    );
+    for index in [18, 19] {
+        assert_eq!(
+            manifest.capabilities[index].input_schema["required"],
+            json!(["frameId", "label", "color"])
+        );
+    }
+    assert_eq!(manifest.capabilities[20].input_schema["minProperties"], 3);
+    let category_delete = &manifest.capabilities[21].input_schema;
+    assert_eq!(
+        category_delete["required"],
+        json!(["frameId", "categoryId"])
+    );
+    assert_eq!(
+        category_delete["properties"]["reassignToId"]["pattern"],
+        "^[A-Za-z0-9_-]+$"
     );
     let frame = &manifest.capabilities[2].input_schema["properties"]["frameId"];
     assert_eq!(frame["minLength"], 1);

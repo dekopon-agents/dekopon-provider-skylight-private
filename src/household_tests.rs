@@ -772,6 +772,15 @@ fn write_input(write: Mutation) -> Value {
             json!({"frameId":"frame-test", "listId":"list-test", "label":"Chores", "kind":"to_do"})
         }
         Mutation::ListDelete => json!({"frameId":"frame-test", "listId":"list-test"}),
+        Mutation::CategoryCreate | Mutation::CategoryFindOrCreate => {
+            json!({"frameId":"frame-test", "label":"Swim", "color":"#1E88E5"})
+        }
+        Mutation::CategoryUpdate => {
+            json!({"frameId":"frame-test", "categoryId":"category-7", "label":"Swimming"})
+        }
+        Mutation::CategoryDelete => {
+            json!({"frameId":"frame-test", "categoryId":"category-7", "reassignToId":"category-8"})
+        }
     }
 }
 /// Every selector a write's route takes, and its required non-selector field.
@@ -782,6 +791,8 @@ fn write_required(write: Mutation) -> &'static [&'static str] {
         Mutation::ItemCreate => &["frameId", "listId", "label"],
         Mutation::ListCreate => &["frameId", "label"],
         Mutation::ListUpdate | Mutation::ListDelete => &["frameId", "listId"],
+        Mutation::CategoryCreate | Mutation::CategoryFindOrCreate => &["frameId", "label", "color"],
+        Mutation::CategoryUpdate | Mutation::CategoryDelete => &["frameId", "categoryId"],
         _ => &["frameId", "listId", "itemId"],
     }
 }
@@ -792,6 +803,14 @@ fn write_record(write: Mutation) -> (&'static str, &'static str, Value) {
             "event",
             "summary",
             json!({"data":{"id":"record-7","type":"calendar_event","attributes":{"summary":"Dentist","all_day":false}}}),
+        ),
+        Mutation::CategoryCreate
+        | Mutation::CategoryFindOrCreate
+        | Mutation::CategoryUpdate
+        | Mutation::CategoryDelete => (
+            "category",
+            "label",
+            json!({"data":{"id":"record-7","type":"category","attributes":{"label":"Dentist","color":"#1E88E5"}}}),
         ),
         Mutation::ListCreate | Mutation::ListUpdate | Mutation::ListDelete => (
             "list",
@@ -1743,6 +1762,219 @@ fn list_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags
         ],
         vec!["list-delete", "--frame", "x"],
         vec!["list-delete", "--frame", "x", "--list", "y", "--label", "a"],
+    ] {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted: {argv:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
+    }
+}
+
+#[test]
+fn each_category_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
+    let base = "https://app.ourskylight.com/api/frames/frame-test/categories";
+    let cases: [(Mutation, Value, &str, String, &[u8]); 5] = [
+        (
+            Mutation::CategoryCreate,
+            write_input(Mutation::CategoryCreate),
+            "POST",
+            base.to_owned(),
+            br##"{"label":"Swim","color":"#1E88E5"}"##,
+        ),
+        (
+            Mutation::CategoryFindOrCreate,
+            write_input(Mutation::CategoryFindOrCreate),
+            "POST",
+            format!("{base}/find_or_create"),
+            br##"{"label":"Swim","color":"#1E88E5"}"##,
+        ),
+        (
+            Mutation::CategoryUpdate,
+            write_input(Mutation::CategoryUpdate),
+            "PATCH",
+            format!("{base}/category-7"),
+            br#"{"label":"Swimming"}"#,
+        ),
+        // The one write with a query: the reassignment target, a bounded selector.
+        (
+            Mutation::CategoryDelete,
+            write_input(Mutation::CategoryDelete),
+            "DELETE",
+            format!("{base}/category-7?reassign_to_id=category-8"),
+            b"",
+        ),
+        (
+            Mutation::CategoryDelete,
+            json!({"frameId":"frame-test", "categoryId":"category-7"}),
+            "DELETE",
+            format!("{base}/category-7"),
+            b"",
+        ),
+    ];
+    for (write, input, method, uri, body) in cases {
+        let calls = std::cell::Cell::new(0);
+        write
+            .invoke(input, |request| {
+                calls.set(calls.get() + 1);
+                assert_write_request(&request, method, &uri, body);
+                Ok(write_response(204, b""))
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1, "{write:?} must send exactly once");
+    }
+}
+
+#[test]
+fn malformed_category_write_inputs_are_refused_before_any_http() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let mut cases: Vec<(Mutation, &str, Value)> = Vec::new();
+    for write in [
+        Mutation::CategoryCreate,
+        Mutation::CategoryFindOrCreate,
+        Mutation::CategoryUpdate,
+    ] {
+        for (field, value) in [
+            ("label", json!("")),
+            ("label", json!("   ")),
+            ("label", json!(long)),
+            ("label", json!("tab\there")),
+            ("label", Value::Null),
+            ("color", json!("")),
+            ("color", json!("x".repeat(33))),
+            ("color", json!("rgb(1, 2, 3)")),
+            ("color", Value::Null),
+            ("reassignToId", json!("category-8")),
+        ] {
+            cases.push((write, field, value));
+        }
+    }
+    for value in ["/", "%2F", "?", "#", "..", "a/b", "x&y=z", "", "é", "x.y"] {
+        cases.push((Mutation::CategoryDelete, "reassignToId", json!(value)));
+    }
+    cases.push((Mutation::CategoryDelete, "reassignToId", Value::Null));
+    cases.push((Mutation::CategoryDelete, "label", json!("Swim")));
+    for (write, field, value) in cases {
+        let mut data = write_input(write);
+        data[field] = value.clone();
+        let error = write
+            .invoke(data, |_| panic!("{write:?} sent invalid {field}={value}"))
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
+    }
+    // A category update must change something.
+    assert!(
+        Mutation::CategoryUpdate
+            .uri(&json!({"frameId":"frame-test","categoryId":"category-7"}))
+            .is_err()
+    );
+}
+
+#[test]
+fn category_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags() {
+    let cases = [
+        (
+            vec![
+                "category-add",
+                "--frame",
+                "frame-test",
+                "--label",
+                "Swim",
+                "--color",
+                "#1E88E5",
+            ],
+            Mutation::CategoryCreate,
+            write_input(Mutation::CategoryCreate),
+        ),
+        (
+            vec![
+                "category-find-or-create",
+                "--frame",
+                "frame-test",
+                "--label",
+                "Swim",
+                "--color",
+                "#1E88E5",
+            ],
+            Mutation::CategoryFindOrCreate,
+            write_input(Mutation::CategoryFindOrCreate),
+        ),
+        (
+            vec![
+                "category-update",
+                "--frame",
+                "frame-test",
+                "--category",
+                "category-7",
+                "--label",
+                "Swimming",
+            ],
+            Mutation::CategoryUpdate,
+            write_input(Mutation::CategoryUpdate),
+        ),
+        (
+            vec![
+                "category-delete",
+                "--frame",
+                "frame-test",
+                "--category",
+                "category-7",
+                "--reassign-to",
+                "category-8",
+            ],
+            Mutation::CategoryDelete,
+            write_input(Mutation::CategoryDelete),
+        ),
+    ];
+    for (words, write, expected) in cases {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability, input, ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), write.capability());
+        assert_eq!(input, expected);
+    }
+    for words in [
+        vec!["category-add", "--frame", "x", "--label", "a"],
+        vec![
+            "category-add",
+            "--frame",
+            "x",
+            "--label",
+            "a",
+            "--color",
+            "b",
+            "--color",
+            "c",
+        ],
+        vec!["category-find-or-create", "--frame", "x", "--color", "b"],
+        vec!["category-update", "--frame", "x", "--category", "y"],
+        vec![
+            "category-delete",
+            "--frame",
+            "x",
+            "--category",
+            "y",
+            "--reassign-to",
+            "../secret-sentinel",
+        ],
+        vec![
+            "category-delete",
+            "--frame",
+            "x",
+            "--category",
+            "y",
+            "--label",
+            "a",
+        ],
     ] {
         let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
         let outcome = provider::command::<SkylightPrivate>(&argv, false);

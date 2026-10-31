@@ -3,16 +3,17 @@ use clap::{Parser, Subcommand};
 use dekopon_provider_sdk::provider::{Capability, Proposal, Usage};
 
 use crate::{
-    Account, AlbumMessageIds, AlbumMessages, Albums, Categories, EventCreate, EventDelete,
-    EventUpdate, Events, Frames, ItemComplete, ItemCreate, ItemDelete, ItemUpdate, Items, List,
-    ListCreate, ListDelete, ListUpdate, Lists, Message, MessageComments, MessageLikes, Messages,
-    MonthInReview, MonthInReviews, SkylightPrivate, Tasks, household,
+    Account, AlbumMessageIds, AlbumMessages, Albums, Categories, CategoryCreate, CategoryDelete,
+    CategoryFindOrCreate, CategoryUpdate, EventCreate, EventDelete, EventUpdate, Events, Frames,
+    ItemComplete, ItemCreate, ItemDelete, ItemUpdate, Items, List, ListCreate, ListDelete,
+    ListUpdate, Lists, Message, MessageComments, MessageLikes, Messages, MonthInReview,
+    MonthInReviews, SkylightPrivate, Tasks, household,
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "skylight",
-    about = "Unsupported private Skylight household reads and calendar event, list and list item writes over broker HTTP",
+    about = "Unsupported private Skylight household reads and calendar event, list, list item and category writes over broker HTTP",
     disable_version_flag = true
 )]
 pub struct Args {
@@ -228,6 +229,40 @@ enum Command {
         #[arg(long)]
         list: String,
     },
+    CategoryAdd {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        color: String,
+    },
+    CategoryFindOrCreate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        color: String,
+    },
+    CategoryUpdate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        category: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+    },
+    CategoryDelete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        category: String,
+        #[arg(long)]
+        reassign_to: Option<String>,
+    },
 }
 
 pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
@@ -416,6 +451,39 @@ pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
                 household::Mutation::ListDelete.uri(input)
             })?
         }
+        Command::CategoryAdd {
+            frame,
+            label,
+            color,
+        } => checked::<CategoryCreate>(
+            household::CategoryInput::new(frame, label, color),
+            |input| household::Mutation::CategoryCreate.uri(input),
+        )?,
+        Command::CategoryFindOrCreate {
+            frame,
+            label,
+            color,
+        } => checked::<CategoryFindOrCreate>(
+            household::CategoryInput::new(frame, label, color),
+            |input| household::Mutation::CategoryFindOrCreate.uri(input),
+        )?,
+        Command::CategoryUpdate {
+            frame,
+            category,
+            label,
+            color,
+        } => checked::<CategoryUpdate>(
+            household::CategoryUpdateInput::new(frame, category, label, color),
+            |input| household::Mutation::CategoryUpdate.uri(input),
+        )?,
+        Command::CategoryDelete {
+            frame,
+            category,
+            reassign_to,
+        } => checked::<CategoryDelete>(
+            household::CategoryDeleteInput::new(frame, category, reassign_to),
+            |input| household::Mutation::CategoryDelete.uri(input),
+        )?,
     };
     Ok(proposal)
 }

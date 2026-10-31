@@ -293,6 +293,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
 }
 
 const EVENTS_TARGET: &str = "/skylight/api/frames/frame-test/calendar_events";
+const CATEGORIES_TARGET: &str = "/skylight/api/frames/frame-test/categories";
 const LISTS_TARGET: &str = "/skylight/api/frames/frame-test/lists";
 const ITEMS_TARGET: &str = "/skylight/api/frames/frame-test/lists/list-test/list_items";
 /// The same bytes the native create test pins (`src/household_tests.rs`).
@@ -311,7 +312,7 @@ fn create_input() -> Value {
     })
 }
 
-fn writes() -> [(&'static str, &'static str, Value, String); 10] {
+fn writes() -> [(&'static str, &'static str, Value, String); 14] {
     [
         (
             "skylight-private.calendar.events.create",
@@ -372,6 +373,30 @@ fn writes() -> [(&'static str, &'static str, Value, String); 10] {
             "DELETE",
             json!({"frameId":"frame-test","listId":"list-test"}),
             format!("{LISTS_TARGET}/list-test"),
+        ),
+        (
+            "skylight-private.categories.create",
+            "POST",
+            json!({"frameId":"frame-test","label":"Swim","color":"#1E88E5"}),
+            CATEGORIES_TARGET.to_owned(),
+        ),
+        (
+            "skylight-private.categories.find-or-create",
+            "POST",
+            json!({"frameId":"frame-test","label":"Swim","color":"#1E88E5"}),
+            format!("{CATEGORIES_TARGET}/find_or_create"),
+        ),
+        (
+            "skylight-private.categories.update",
+            "PATCH",
+            json!({"frameId":"frame-test","categoryId":"category-7","color":"blue"}),
+            format!("{CATEGORIES_TARGET}/category-7"),
+        ),
+        (
+            "skylight-private.categories.delete",
+            "DELETE",
+            json!({"frameId":"frame-test","categoryId":"category-7","reassignToId":"category-8"}),
+            format!("{CATEGORIES_TARGET}/category-7?reassign_to_id=category-8"),
         ),
     ]
 }

@@ -104,7 +104,7 @@ pub struct SkylightPrivate;
 impl Provider for SkylightPrivate {
     const ID: &'static str = "skylight-private";
     const COMMAND_WORDS: &'static [&'static str] = &[COMMAND_WORD];
-    const DESCRIPTION: &'static str = "Unsupported private Skylight household reads and calendar event, list and list item writes over broker HTTP";
+    const DESCRIPTION: &'static str = "Unsupported private Skylight household reads and calendar event, list, list item and category writes over broker HTTP";
     type Args = commands::Args;
     type Capabilities = (
         Account,
@@ -125,6 +125,10 @@ impl Provider for SkylightPrivate {
         ListCreate,
         ListUpdate,
         ListDelete,
+        CategoryCreate,
+        CategoryFindOrCreate,
+        CategoryUpdate,
+        CategoryDelete,
         Messages,
         Message,
         MessageLikes,
@@ -484,6 +488,54 @@ read_capability!(
     |input: &Value| household::Mutation::ListDelete.uri(input),
     |input: &Value| household::Mutation::ListDelete.body(input),
     |body: &[u8]| household::Mutation::ListDelete.project_body(body)
+);
+read_capability!(
+    CategoryCreate,
+    "categories.create",
+    "Creates one category with a bounded label and color",
+    household::CategoryInput,
+    method::POST,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::CategoryCreate.uri(input),
+    |input: &Value| household::Mutation::CategoryCreate.body(input),
+    |body: &[u8]| household::Mutation::CategoryCreate.project_body(body)
+);
+read_capability!(
+    CategoryFindOrCreate,
+    "categories.find-or-create",
+    "Returns the category with this label, creating it with this color if absent",
+    household::CategoryInput,
+    method::POST,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::CategoryFindOrCreate.uri(input),
+    |input: &Value| household::Mutation::CategoryFindOrCreate.body(input),
+    |body: &[u8]| household::Mutation::CategoryFindOrCreate.project_body(body)
+);
+read_capability!(
+    CategoryUpdate,
+    "categories.update",
+    "Updates one category's label or color",
+    household::CategoryUpdateInput,
+    method::PATCH,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::CategoryUpdate.uri(input),
+    |input: &Value| household::Mutation::CategoryUpdate.body(input),
+    |body: &[u8]| household::Mutation::CategoryUpdate.project_body(body)
+);
+read_capability!(
+    CategoryDelete,
+    "categories.delete",
+    "Deletes one category, optionally reassigning its items to another",
+    household::CategoryDeleteInput,
+    method::DELETE,
+    EffectKind::ExternalWrite,
+    RiskLevel::Critical,
+    |input: &Value| household::Mutation::CategoryDelete.uri(input),
+    |input: &Value| household::Mutation::CategoryDelete.body(input),
+    |body: &[u8]| household::Mutation::CategoryDelete.project_body(body)
 );
 
 #[allow(unsafe_code)]
@@ -1043,6 +1095,13 @@ mod tests {
             ("skylight-private.lists.create", RiskLevel::High),
             ("skylight-private.lists.update", RiskLevel::High),
             ("skylight-private.lists.delete", RiskLevel::Critical),
+            ("skylight-private.categories.create", RiskLevel::High),
+            (
+                "skylight-private.categories.find-or-create",
+                RiskLevel::High,
+            ),
+            ("skylight-private.categories.update", RiskLevel::High),
+            ("skylight-private.categories.delete", RiskLevel::Critical),
         ];
         assert_eq!(
             manifest
@@ -1513,7 +1572,7 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 27);
+        assert_eq!(manifest.capabilities.len(), 31);
         for capability in &manifest.capabilities {
             assert!(capability.id.as_str().starts_with("skylight-private."));
         }
