@@ -333,7 +333,7 @@ impl Read {
         let uri = DEFAULT_BASE
             .join(&self.uri(&input)?)
             .map_err(|_| invalid_request())?;
-        let body = send_once(&uri, send)?;
+        let body = send_once(method::GET, &uri, None, send)?.ok_or_else(invalid_response)?;
         self.project_body(&body)
     }
 
@@ -346,6 +346,438 @@ impl Read {
             Self::Items => project(body, "items", false, ProjectionKind::Item),
             Self::Tasks => project(body, "tasks", false, ProjectionKind::Task),
         }
+    }
+}
+
+// Calendar event writes. Selectors, bounds and body fields follow INVENTORY rows 7-9; the body is
+// flat snake_case JSON with absent fields omitted, as pyskylight `client.py:168-185` sends it.
+const EVENT_TIME_PATTERN: &str = "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2})?)?$";
+const MAX_EVENT_TIME_BYTES: usize = 64;
+const MAX_EVENT_LIST: usize = 16;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EventCreateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    summary: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(max = 64), regex(pattern = EVENT_TIME_PATTERN))]
+    starts_at: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(max = 64), regex(pattern = EVENT_TIME_PATTERN))]
+    ends_at: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    all_day: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_+/-]+$")
+    )]
+    timezone: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_texts"
+    )]
+    #[schemars(
+        with = "Vec<String>",
+        length(min = 1, max = 16),
+        inner(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$")),
+        extend("uniqueItems" = true)
+    )]
+    category_ids: Option<Vec<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_texts"
+    )]
+    #[schemars(
+        with = "Vec<String>",
+        length(min = 1, max = 16),
+        inner(length(min = 1, max = 256), regex(pattern = "^[ -~]+$"))
+    )]
+    rrule: Option<Vec<String>>,
+}
+impl EventCreateInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        frame_id: String,
+        summary: String,
+        starts_at: Option<String>,
+        ends_at: Option<String>,
+        all_day: Option<bool>,
+        timezone: Option<String>,
+        category_ids: Vec<String>,
+        rrule: Vec<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            summary,
+            starts_at,
+            ends_at,
+            all_day,
+            timezone,
+            category_ids: (!category_ids.is_empty()).then_some(category_ids),
+            rrule: (!rrule.is_empty()).then_some(rrule),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 3))]
+pub struct EventUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    event_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    summary: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(max = 64), regex(pattern = EVENT_TIME_PATTERN))]
+    starts_at: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(max = 64), regex(pattern = EVENT_TIME_PATTERN))]
+    ends_at: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    all_day: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_+/-]+$")
+    )]
+    timezone: Option<String>,
+}
+impl EventUpdateInput {
+    pub(crate) fn new(
+        frame_id: String,
+        event_id: String,
+        summary: Option<String>,
+        starts_at: Option<String>,
+        ends_at: Option<String>,
+        all_day: Option<bool>,
+        timezone: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            event_id,
+            summary,
+            starts_at,
+            ends_at,
+            all_day,
+            timezone,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EventDeleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    event_id: String,
+}
+impl EventDeleteInput {
+    pub(crate) fn new(frame_id: String, event_id: String) -> Self {
+        Self { frame_id, event_id }
+    }
+}
+
+fn present_texts<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error> {
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
+/// The fixed write body: field order and names are the wire contract, never caller-chosen.
+#[derive(Default, Serialize)]
+struct EventBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    starts_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ends_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    all_day: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timezone: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category_ids: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rrule: Option<Vec<&'a str>>,
+}
+
+// Variants name resource then verb; later batches add other resources' writes here.
+#[allow(clippy::enum_variant_names)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mutation {
+    EventCreate,
+    EventUpdate,
+    EventDelete,
+}
+
+#[cfg(test)]
+pub(crate) const WRITES: [Mutation; 3] = [
+    Mutation::EventCreate,
+    Mutation::EventUpdate,
+    Mutation::EventDelete,
+];
+
+impl Mutation {
+    #[cfg(test)]
+    pub(crate) fn capability(self) -> &'static str {
+        match self {
+            Self::EventCreate => "skylight-private.calendar.events.create",
+            Self::EventUpdate => "skylight-private.calendar.events.update",
+            Self::EventDelete => "skylight-private.calendar.events.delete",
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_capability(id: &str) -> Option<Self> {
+        WRITES.into_iter().find(|write| write.capability() == id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn method(self) -> &'static str {
+        match self {
+            Self::EventCreate => method::POST,
+            Self::EventUpdate => method::PUT,
+            Self::EventDelete => method::DELETE,
+        }
+    }
+
+    /// Every accepted input field; the first group is required.
+    fn fields(self) -> (&'static [&'static str], &'static [&'static str]) {
+        match self {
+            Self::EventCreate => (
+                &["frameId", "summary"],
+                &[
+                    "startsAt",
+                    "endsAt",
+                    "allDay",
+                    "timezone",
+                    "categoryIds",
+                    "rrule",
+                ],
+            ),
+            Self::EventUpdate => (
+                &["frameId", "eventId"],
+                &["summary", "startsAt", "endsAt", "allDay", "timezone"],
+            ),
+            Self::EventDelete => (&["frameId", "eventId"], &[]),
+        }
+    }
+
+    /// Validates the whole input and returns the fixed route and body; both public halves call it,
+    /// so neither can run on an input the other would refuse.
+    fn request(self, input: &Value) -> Result<(String, Option<Vec<u8>>), ProviderError> {
+        let object = input.as_object().ok_or_else(invalid_household_input)?;
+        let (required, optional) = self.fields();
+        if object
+            .keys()
+            .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
+            || required.iter().any(|key| !object.contains_key(*key))
+            || (self == Self::EventUpdate && !optional.iter().any(|key| object.contains_key(*key)))
+        {
+            return Err(invalid_household_input());
+        }
+        let text = |key: &str| match object.get(key) {
+            None => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.as_str())),
+            Some(_) => Err(invalid_household_input()),
+        };
+        let selector = |key: &str| {
+            let value = text(key)?.ok_or_else(invalid_household_input)?;
+            safe_segment(value)?;
+            Ok::<_, ProviderError>(value)
+        };
+        let frame = selector("frameId")?;
+        let base = format!("{FRAMES_URI}/{frame}/calendar_events");
+        if self == Self::EventDelete {
+            let event = selector("eventId")?;
+            return Ok((format!("{base}/{event}"), None));
+        }
+        let texts = |key: &str, valid: fn(&str) -> bool, unique: bool| match object.get(key) {
+            None => Ok(None),
+            Some(Value::Array(values)) if (1..=MAX_EVENT_LIST).contains(&values.len()) => {
+                let mut seen = HashSet::new();
+                values
+                    .iter()
+                    .map(|value| match value.as_str() {
+                        Some(value) if valid(value) && (!unique || seen.insert(value)) => Ok(value),
+                        _ => Err(invalid_household_input()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Some)
+            }
+            Some(_) => Err(invalid_household_input()),
+        };
+        let checked = |key: &str, valid: fn(&str) -> bool| match text(key)? {
+            Some(value) if !valid(value) => Err(invalid_household_input()),
+            value => Ok(value),
+        };
+        let body = EventBody {
+            summary: checked("summary", valid_summary)?,
+            starts_at: checked("startsAt", valid_event_time)?,
+            ends_at: checked("endsAt", valid_event_time)?,
+            all_day: match object.get("allDay") {
+                None => None,
+                Some(Value::Bool(value)) => Some(*value),
+                Some(_) => return Err(invalid_household_input()),
+            },
+            timezone: checked("timezone", valid_timezone)?,
+            category_ids: texts("categoryIds", |id| safe_segment(id).is_ok(), true)?,
+            rrule: texts("rrule", valid_rule, false)?,
+        };
+        let path = if self == Self::EventUpdate {
+            format!("{base}/{}", selector("eventId")?)
+        } else {
+            base
+        };
+        let body = serde_json::to_vec(&body).map_err(|_| invalid_household_input())?;
+        Ok((path, Some(body)))
+    }
+
+    pub(crate) fn uri(self, input: &Value) -> Result<String, ProviderError> {
+        self.request(input).map(|(path, _)| path)
+    }
+
+    pub(crate) fn body(self, input: &Value) -> Result<Option<Vec<u8>>, ProviderError> {
+        self.request(input).map(|(_, body)| body)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn invoke<F>(self, input: Value, send: F) -> Result<Value, ProviderError>
+    where
+        F: FnOnce(Request) -> Result<Response, HttpError>,
+    {
+        let (path, body) = self.request(&input)?;
+        let uri = DEFAULT_BASE.join(&path).map_err(|_| invalid_request())?;
+        match send_once(self.method(), &uri, body, send)? {
+            Some(body) => self.project_body(&body),
+            None => Ok(no_content_output()),
+        }
+    }
+
+    /// A 200 or 201 must carry the event record, DELETE included; only a 204 has none.
+    pub(crate) fn project_body(self, body: &[u8]) -> Result<Value, ProviderError> {
+        project(body, "event", true, ProjectionKind::Event)
+    }
+}
+
+fn valid_summary(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= MAX_NAME_BYTES
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_timezone(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_+/-".contains(&b))
+        && !value.split('/').any(str::is_empty)
+}
+
+fn valid_rule(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_NAME_BYTES
+        && value.bytes().all(|b| (b' '..=b'~').contains(&b))
+}
+
+/// `YYYY-MM-DD`, or that date with `THH:MM[:SS[.fraction]]` and an optional `Z` or `±HH:MM`.
+fn valid_event_time(value: &str) -> bool {
+    fn two(bytes: &[u8], max: u8) -> bool {
+        bytes.len() == 2
+            && bytes.iter().all(u8::is_ascii_digit)
+            && (bytes[0] - b'0') * 10 + (bytes[1] - b'0') <= max
+    }
+    if !value.is_ascii()
+        || value.len() > MAX_EVENT_TIME_BYTES
+        || value.len() < 10
+        || ordinal(&value[..10]).is_err()
+    {
+        return false;
+    }
+    let rest = &value.as_bytes()[10..];
+    if rest.is_empty() {
+        return true;
+    }
+    if rest.len() < 6
+        || rest[0] != b'T'
+        || !two(&rest[1..3], 23)
+        || rest[3] != b':'
+        || !two(&rest[4..6], 59)
+    {
+        return false;
+    }
+    let mut rest = &rest[6..];
+    if rest.first() == Some(&b':') {
+        if rest.len() < 3 || !two(&rest[1..3], 59) {
+            return false;
+        }
+        rest = &rest[3..];
+        if rest.first() == Some(&b'.') {
+            let digits = rest[1..].iter().take_while(|b| b.is_ascii_digit()).count();
+            if !(1..=9).contains(&digits) {
+                return false;
+            }
+            rest = &rest[1 + digits..];
+        }
+    }
+    match rest {
+        [] | [b'Z'] => true,
+        [sign, h1, h2, b':', m1, m2] if b"+-".contains(sign) => {
+            two(&[*h1, *h2], 23) && two(&[*m1, *m2], 59)
+        }
+        _ => false,
     }
 }
 

@@ -724,3 +724,476 @@ fn relationship_recurrence_and_included_tails_are_validated_before_local_bounds(
     included.push(json!({"id":"tail","type":"category","attributes":{"label":false}}));
     assert!(invoke(Read::Tasks, json!({"data":[],"included":included})).is_err());
 }
+
+fn create_input() -> Value {
+    json!({
+        "frameId": "frame-test",
+        "summary": "Dentist",
+        "startsAt": "2028-03-11T09:00:00-05:00",
+        "endsAt": "2028-03-11T10:00:00-05:00",
+        "allDay": false,
+        "timezone": "America/New_York",
+        "categoryIds": ["category-1", "category-2"],
+        "rrule": ["RRULE:FREQ=WEEKLY;COUNT=2"]
+    })
+}
+fn write_input(write: Mutation) -> Value {
+    match write {
+        Mutation::EventCreate => create_input(),
+        Mutation::EventUpdate => {
+            json!({"frameId":"frame-test", "eventId":"event-7", "summary":"Dentist moved", "allDay":true})
+        }
+        Mutation::EventDelete => json!({"frameId":"frame-test", "eventId":"event-7"}),
+    }
+}
+fn event_record() -> Value {
+    json!({"data":{"id":"event-7","type":"calendar_event","attributes":{"summary":"Dentist","all_day":false}}})
+}
+fn write_response(status: u16, body: &[u8]) -> Response {
+    Response {
+        status,
+        headers: vec![],
+        body: body.to_vec(),
+    }
+}
+
+/// The fixed write request: three read headers plus `content-type`, never a credential.
+fn assert_write_request(request: &Request, method: &str, uri: &str, body: &[u8]) {
+    assert_eq!(request.method, method);
+    assert_eq!(request.uri, uri);
+    assert_eq!(
+        request.body,
+        body,
+        "{}",
+        String::from_utf8_lossy(&request.body)
+    );
+    assert_eq!(
+        request.headers,
+        vec![
+            Header::text("accept", ACCEPT_JSON).unwrap(),
+            Header::text("user-agent", USER_AGENT).unwrap(),
+            Header::text("skylight-api-version", SKYLIGHT_API_VERSION).unwrap(),
+            Header::text("content-type", "application/json").unwrap(),
+        ]
+    );
+    for denied in ["authorization", "cookie"] {
+        assert!(
+            !request
+                .headers
+                .iter()
+                .any(|header| header.name.eq_ignore_ascii_case(denied)),
+            "guest set denied header {denied}"
+        );
+    }
+}
+
+#[test]
+fn each_event_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
+    let base = "https://app.ourskylight.com/api/frames/frame-test/calendar_events";
+    let cases: [(Mutation, &str, String, &[u8]); 3] = [
+        (
+            Mutation::EventCreate,
+            "POST",
+            base.to_owned(),
+            br#"{"summary":"Dentist","starts_at":"2028-03-11T09:00:00-05:00","ends_at":"2028-03-11T10:00:00-05:00","all_day":false,"timezone":"America/New_York","category_ids":["category-1","category-2"],"rrule":["RRULE:FREQ=WEEKLY;COUNT=2"]}"#,
+        ),
+        (
+            Mutation::EventUpdate,
+            "PUT",
+            format!("{base}/event-7"),
+            br#"{"summary":"Dentist moved","all_day":true}"#,
+        ),
+        // DELETE still names its media type, with an empty body.
+        (Mutation::EventDelete, "DELETE", format!("{base}/event-7"), b""),
+    ];
+    for (write, method, uri, body) in cases {
+        let calls = std::cell::Cell::new(0);
+        let output = write
+            .invoke(write_input(write), |request| {
+                calls.set(calls.get() + 1);
+                assert_write_request(&request, method, &uri, body);
+                Ok(write_response(204, b""))
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1, "{write:?} must send exactly once");
+        assert_eq!(output, json!({"ok": true}));
+    }
+    // A minimal create sends only its summary: absent optional fields are omitted, never null.
+    Mutation::EventCreate
+        .invoke(
+            json!({"frameId":"frame-test","summary":"Dentist"}),
+            |request| {
+                assert_eq!(request.body, br#"{"summary":"Dentist"}"#);
+                Ok(write_response(204, b""))
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn write_responses_project_the_returned_event_and_only_a_204_is_bare_ok() {
+    let record = event_record().to_string();
+    for (write, status) in [
+        (Mutation::EventCreate, 201),
+        (Mutation::EventCreate, 200),
+        (Mutation::EventUpdate, 200),
+        (Mutation::EventDelete, 200),
+        (Mutation::EventDelete, 201),
+    ] {
+        let output = write
+            .invoke(write_input(write), |_| {
+                Ok(write_response(status, record.as_bytes()))
+            })
+            .unwrap();
+        assert_eq!(output["event"]["id"], "event-7", "{write:?} {status}");
+        assert_eq!(output["event"]["summary"], "Dentist");
+        assert_eq!(output["coverage"], "bounded-response");
+        assert!(output.get("ok").is_none());
+    }
+    for write in WRITES {
+        let output = write
+            .invoke(write_input(write), |_| Ok(write_response(204, b"")))
+            .unwrap();
+        assert_eq!(output, json!({"ok": true}), "{write:?}");
+        for status in [200, 201] {
+            for body in [b"".as_slice(), b"{}", br#"{"data":null}"#, b"not json"] {
+                let error = write
+                    .invoke(write_input(write), |_| Ok(write_response(status, body)))
+                    .unwrap_err();
+                assert_eq!(error.code(), "invalid-response", "{write:?} {status}");
+            }
+        }
+        for (status, code) in [
+            (202, "unexpected-status"),
+            (403, "forbidden"),
+            (404, "not-found"),
+            (422, "unexpected-status"),
+        ] {
+            let error = write
+                .invoke(write_input(write), |_| {
+                    Ok(write_response(status, record.as_bytes()))
+                })
+                .unwrap_err();
+            assert_eq!(error.code(), code, "{write:?} {status}");
+        }
+    }
+    // Reads keep their 200-only contract: a write status is not a read success.
+    for status in [201, 204] {
+        let error = Read::Lists
+            .invoke(input(Read::Lists), |_| {
+                Ok(write_response(status, br#"{"data":[]}"#))
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "unexpected-status", "read {status}");
+    }
+}
+
+#[test]
+fn malformed_event_write_inputs_are_refused_before_any_http() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let seventeen: Vec<String> = (0..17).map(|n| format!("category-{n}")).collect();
+    let mut cases: Vec<(Mutation, &str, Value)> = Vec::new();
+    for write in WRITES {
+        for field in [
+            "url",
+            "endpoint",
+            "host",
+            "path",
+            "query",
+            "headers",
+            "authorization",
+            "token",
+            "body",
+            "method",
+            "extra",
+            "json",
+            "include",
+            "id",
+        ] {
+            cases.push((write, field, json!("secret-sentinel")));
+        }
+        for value in ["/", "%2F", "?", "#", "..", "a/b", "x\r\n", "", "é", "x.y"] {
+            cases.push((write, "frameId", json!(value)));
+            if write != Mutation::EventCreate {
+                cases.push((write, "eventId", json!(value)));
+            }
+        }
+        cases.push((write, "frameId", Value::Null));
+        cases.push((write, "frameId", json!(7)));
+    }
+    for write in [Mutation::EventCreate, Mutation::EventUpdate] {
+        for (field, value) in [
+            ("summary", json!("")),
+            ("summary", json!("   ")),
+            ("summary", json!(long)),
+            ("summary", json!("line\nbreak")),
+            ("summary", json!("tab\there")),
+            ("summary", Value::Null),
+            ("summary", json!(["Dentist"])),
+            ("startsAt", json!("2028-02-30")),
+            ("startsAt", json!("2028-03-11 09:00")),
+            ("startsAt", json!("2028-03-11T24:00")),
+            ("startsAt", json!("2028-03-11T09:60")),
+            ("startsAt", json!("2028-03-11T09:00:00.")),
+            ("startsAt", json!("2028-03-11T09:00:00+5")),
+            ("startsAt", json!("2028-03-11T09:00:00Zjunk")),
+            ("startsAt", json!("2028-03-1é")),
+            (
+                "startsAt",
+                json!(format!("2028-03-11T09:00:00.{}", "1".repeat(60))),
+            ),
+            ("endsAt", json!("tomorrow")),
+            ("endsAt", Value::Null),
+            ("allDay", json!("true")),
+            ("allDay", Value::Null),
+            ("timezone", json!("")),
+            ("timezone", json!("America//New_York")),
+            ("timezone", json!("America/New York")),
+            ("timezone", json!("x".repeat(129))),
+        ] {
+            cases.push((write, field, value));
+        }
+    }
+    for (field, value) in [
+        ("categoryIds", json!([])),
+        ("categoryIds", json!("category-1")),
+        ("categoryIds", json!(["category-1", "category-1"])),
+        ("categoryIds", json!(["../secret-sentinel"])),
+        ("categoryIds", json!([7])),
+        ("categoryIds", json!(seventeen)),
+        ("rrule", json!([])),
+        ("rrule", json!([""])),
+        ("rrule", json!(["RRULE:FREQ=DAILY\r\nX-SENTINEL"])),
+        ("rrule", json!([long])),
+        ("rrule", json!(vec!["RRULE:FREQ=DAILY"; 17])),
+    ] {
+        cases.push((Mutation::EventCreate, field, value));
+    }
+    // Update accepts neither categories nor recurrence (INVENTORY row 8).
+    cases.push((Mutation::EventUpdate, "categoryIds", json!(["category-1"])));
+    cases.push((Mutation::EventUpdate, "rrule", json!(["RRULE:FREQ=DAILY"])));
+    cases.push((Mutation::EventDelete, "summary", json!("Dentist")));
+    for (write, field, value) in cases {
+        let mut data = write_input(write);
+        data[field] = value.clone();
+        let error = write
+            .invoke(data, |_| panic!("{write:?} sent invalid {field}={value}"))
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
+    }
+    for write in WRITES {
+        let selector = if write == Mutation::EventCreate {
+            "summary"
+        } else {
+            "eventId"
+        };
+        for field in ["frameId", selector] {
+            let mut data = write_input(write);
+            data.as_object_mut().unwrap().remove(field);
+            assert!(write.uri(&data).is_err(), "{write:?} without {field}");
+        }
+        for bad in [Value::Null, json!([]), json!({}), json!("x")] {
+            assert!(write.uri(&bad).is_err());
+        }
+    }
+    // An update must change something.
+    assert!(
+        Mutation::EventUpdate
+            .uri(&json!({"frameId":"frame-test","eventId":"event-7"}))
+            .is_err()
+    );
+    // Accepted edges: bare dates, UTC, fractions, 16 categories and rules, 256-byte text.
+    let sixteen: Vec<String> = (0..16).map(|n| format!("category-{n}")).collect();
+    for (field, value) in [
+        ("startsAt", json!("2028-02-29")),
+        ("startsAt", json!("2028-03-11T09:00Z")),
+        ("startsAt", json!("2028-03-11T23:59:59.123456789+14:00")),
+        ("categoryIds", json!(sixteen)),
+        ("rrule", json!(vec!["EXDATE:20280318T090000"; 16])),
+        ("summary", json!("é".repeat(MAX_NAME_BYTES / 2))),
+    ] {
+        let mut data = create_input();
+        data[field] = value.clone();
+        assert!(Mutation::EventCreate.body(&data).is_ok(), "{field}={value}");
+    }
+}
+
+#[test]
+fn event_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags() {
+    let cases = [
+        (
+            vec![
+                "event-add",
+                "--frame",
+                "frame-test",
+                "--summary",
+                "Dentist",
+                "--starts-at",
+                "2028-03-11T09:00:00-05:00",
+                "--ends-at",
+                "2028-03-11T10:00:00-05:00",
+                "--all-day",
+                "false",
+                "--tz",
+                "America/New_York",
+                "--category",
+                "category-1",
+                "--rrule",
+                "RRULE:FREQ=WEEKLY;COUNT=2",
+                "--category",
+                "category-2",
+            ],
+            Mutation::EventCreate,
+            create_input(),
+        ),
+        (
+            vec!["event-add", "--frame", "frame-test", "--summary", "Dentist"],
+            Mutation::EventCreate,
+            json!({"frameId":"frame-test","summary":"Dentist"}),
+        ),
+        (
+            vec![
+                "event-update",
+                "--frame",
+                "frame-test",
+                "--event",
+                "event-7",
+                "--summary",
+                "Dentist moved",
+                "--all-day",
+                "true",
+            ],
+            Mutation::EventUpdate,
+            write_input(Mutation::EventUpdate),
+        ),
+        (
+            vec![
+                "event-delete",
+                "--event",
+                "event-7",
+                "--frame",
+                "frame-test",
+            ],
+            Mutation::EventDelete,
+            write_input(Mutation::EventDelete),
+        ),
+    ];
+    for (words, write, expected) in cases {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability, input, ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), write.capability());
+        assert_eq!(input, expected);
+    }
+    for words in [
+        vec!["event-add", "--frame", "frame-test"],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--summary",
+            "b",
+        ],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--frame",
+            "y",
+            "--summary",
+            "a",
+        ],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--category",
+            "../secret-sentinel",
+        ],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--starts-at",
+            "secret-sentinel",
+        ],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--json",
+            "{}",
+        ],
+        vec![
+            "event-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--all-day",
+            "yes",
+        ],
+        vec!["event-update", "--frame", "x", "--event", "y"],
+        vec![
+            "event-update",
+            "--frame",
+            "x",
+            "--event",
+            "y",
+            "--category",
+            "c",
+        ],
+        vec![
+            "event-update",
+            "--frame",
+            "x",
+            "--event",
+            "y",
+            "--tz",
+            "a",
+            "--tz",
+            "b",
+        ],
+        vec!["event-delete", "--frame", "x"],
+        vec![
+            "event-delete",
+            "--frame",
+            "x",
+            "--event",
+            "../secret-sentinel",
+        ],
+        vec![
+            "event-delete",
+            "--frame",
+            "x",
+            "--event",
+            "y",
+            "--summary",
+            "z",
+        ],
+        vec!["event-delete", "x", "y"],
+    ] {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted: {argv:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
+    }
+}

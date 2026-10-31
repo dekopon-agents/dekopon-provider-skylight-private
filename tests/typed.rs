@@ -39,7 +39,7 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     conformance::<SkylightPrivate>(component())?;
     let manifest = provider::manifest::<SkylightPrivate>()?;
     assert_eq!(manifest.id.as_str(), "skylight-private");
-    assert_eq!(manifest.capabilities.len(), 8);
+    assert_eq!(manifest.capabilities.len(), 11);
     let expected_ids = [
         ACCOUNT,
         FRAMES,
@@ -49,6 +49,9 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
         "skylight-private.lists.read",
         "skylight-private.list.items.list",
         "skylight-private.tasks.list",
+        "skylight-private.calendar.events.create",
+        "skylight-private.calendar.events.update",
+        "skylight-private.calendar.events.delete",
     ];
     assert_eq!(
         manifest
@@ -60,10 +63,31 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     );
     for cap in &manifest.capabilities {
         assert!(cap.id.as_str().starts_with("skylight-private."));
-        assert_eq!(cap.effect, dekopon_provider_sdk::EffectKind::ReadOnly);
-        assert_eq!(cap.risk, dekopon_provider_sdk::RiskLevel::Medium);
         assert_eq!(cap.input_schema["additionalProperties"], false);
     }
+    let create = &manifest.capabilities[8].input_schema;
+    assert_eq!(create["required"], json!(["frameId", "summary"]));
+    assert_eq!(create["properties"]["summary"]["maxLength"], 256);
+    assert_eq!(create["properties"]["startsAt"]["maxLength"], 64);
+    let categories = &create["properties"]["categoryIds"];
+    assert_eq!(categories["maxItems"], 16);
+    assert_eq!(categories["uniqueItems"], true);
+    assert_eq!(categories["items"]["pattern"], "^[A-Za-z0-9_-]+$");
+    assert_eq!(create["properties"]["rrule"]["maxItems"], 16);
+    assert_eq!(
+        create["properties"]["rrule"]["items"]["pattern"],
+        "^[ -~]+$"
+    );
+    let update = &manifest.capabilities[9].input_schema;
+    assert_eq!(update["required"], json!(["frameId", "eventId"]));
+    // An update names at least one field beyond its two selectors.
+    assert_eq!(update["minProperties"], 3);
+    assert!(update["properties"].get("categoryIds").is_none());
+    assert!(update["properties"].get("rrule").is_none());
+    assert_eq!(
+        manifest.capabilities[10].input_schema["required"],
+        json!(["frameId", "eventId"])
+    );
     let frame = &manifest.capabilities[2].input_schema["properties"]["frameId"];
     assert_eq!(frame["minLength"], 1);
     assert_eq!(frame["maxLength"], 128);

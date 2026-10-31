@@ -7,10 +7,15 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its eight ordered capabilities are independently grantable,
-Medium-risk and read-only. Requests default to `https://app.ourskylight.com/api`:
+`dekopon.dev/provider/v1alpha1`. Its eleven ordered capabilities are independently grantable.
+The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes are
+`ExternalWrite`: create and update are High risk, delete is Critical. Because they are not
+`ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
+**No write is granted or bound in any deployment, and whether Skylight accepts a write made with
+the broker's token is unverified: no live write has been made.** Requests default to
+`https://app.ourskylight.com/api`:
 
-| Capability | GET route | Small projection |
+| Capability | Method and route | Small projection |
 |---|---|---|
 | `skylight-private.account.read` | `/user` | `account.id` only (not full Python `whoami`) |
 | `skylight-private.frames.list` | `/frames` | At most 32 sorted frame IDs and optional names |
@@ -20,9 +25,15 @@ Medium-risk and read-only. Requests default to `https://app.ourskylight.com/api`
 | `skylight-private.lists.read` | `/frames/{frameId}/lists/{listId}` | `list`: metadata and linked included items; section count only |
 | `skylight-private.list.items.list` | `/frames/{frameId}/lists/{listId}/list_items` | `items`: labels, source status, section, position/draft, list linkage |
 | `skylight-private.tasks.list` | `/frames/{frameId}/chores?after=…&before=…&include_late=…&include_up_for_grabs=…&filter=linked_to_profile` | `tasks`: source status/dates/recurrence, separate assignment and completion-category linkage |
+| `skylight-private.calendar.events.create` | POST `/frames/{frameId}/calendar_events` | `event`: the returned record, as the events projection; `{"ok":true}` on 204 |
+| `skylight-private.calendar.events.update` | PUT `/frames/{frameId}/calendar_events/{eventId}` | `event`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.calendar.events.delete` | DELETE `/frames/{frameId}/calendar_events/{eventId}` | `event` when a record is returned; `{"ok":true}` on 204 |
 
-The legacy manifest description remains `Unsupported private Skylight account and frame reads over
-broker HTTP`. The command word is `skylight`. Original account/frames inputs and outputs are unchanged.
+The reads' routes are GETs.
+
+The manifest description is `Unsupported private Skylight household reads and calendar event writes
+over broker HTTP` (formerly `… account and frame reads over broker HTTP`). The command word is
+`skylight`. Original account/frames inputs and outputs are unchanged.
 
 ## Owner base URL
 
@@ -46,7 +57,9 @@ The broker remains the destination-policy boundary: configure `allowedHosts` and
 
 `tests/cassettes/skylight-private/0001-GET-calendar-events.json` is an **authored synthetic
 cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
-cases. It is not a vendor recording and contains no credentials, cookies, account identifiers,
+cases. `0002-POST-calendar-events.json`, `0003-PUT-calendar-event.json` and
+`0004-DELETE-calendar-event.json` are authored synthetic write exchanges (labelled `provenance:
+synthetic`); none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
 or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
 native request seam, and replays the same response through the real component. The component
 harness's host match alone is not used as proof of path/query correctness. Both require no vendor
@@ -64,9 +77,12 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `lists --frame ID` | `frameId` |
 | `list-show --frame ID --list ID` | `frameId`, `listId` |
 | `list-items --frame ID --list ID` | `frameId`, `listId` |
+| `event-add --frame ID --summary TEXT [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE] [--category ID]... [--rrule RULE]...` | `frameId`, `summary`; optional `startsAt`, `endsAt`, `allDay`, `timezone`, arrays `categoryIds`, `rrule` |
+| `event-update --frame ID --event ID [--summary TEXT] [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE]` | `frameId`, `eventId` and at least one optional field |
+| `event-delete --frame ID --event ID` | `frameId`, `eventId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
-Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered, but not repeated; no positional IDs,
+Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
 `--flag=value`, implicit frame, per-command help, stdin JSON, or transport escape hatch is accepted.
 Unknown/missing/duplicate flags and invalid values return a fixed sanitized usage error, exit 2.
 Piped input is ignored. Every input schema has `additionalProperties:false`; duplicate wire JSON
@@ -74,10 +90,27 @@ members fail closed. Account/frames still reject every selector and flag. The SD
 remains off. Proposals undergo the same constraint/Cedar/broker authorization as direct invocation;
 parsing never grants authority or contacts HTTP.
 
-Frame/list selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
+Frame/list/event selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
 query delimiters and control characters are rejected. Query values are percent-encoded (including
 `/` in timezones and `+` in `Etc/GMT+5`). No URL, method, arbitrary include, page, cursor, header, body, token,
 assignee or completion selector is accepted. Unknown capability takes precedence over invalid JSON.
+
+### Calendar event writes
+
+The writes take only typed, bounded fields, and every write input has `additionalProperties:false`:
+
+- `summary` is 1–256 UTF-8 bytes, not blank, with no control characters.
+- `startsAt` and `endsAt` are a Gregorian `YYYY-MM-DD` or that date with `THH:MM[:SS[.fraction]]`
+  and an optional `Z` or `±HH:MM` (at most 64 bytes). They are sent as given, not converted.
+- `allDay` is a boolean. `timezone` follows the calendar read's rule.
+- `categoryIds` holds 1–16 unique selectors. `rrule` holds 1–16 printable-ASCII strings of 1–256
+  bytes; the provider sends recurrence rules as given and does not interpret them.
+
+Update takes neither categories nor recurrence, and must name at least one field. Delete takes
+only its two selectors. The body is flat snake_case JSON (`summary`, `starts_at`, `ends_at`,
+`all_day`, `timezone`, `category_ids`, `rrule`, in that order), and absent fields are omitted,
+never sent as null. This follows `joshuaswarren/pyskylight`'s client and tests. No URL, method,
+header, query, `extra` or `--json` passthrough exists.
 
 ### Calendar boundaries and interpretation
 
@@ -152,8 +185,9 @@ unknown statuses and unresolved linkage must remain visible limitations.
 
 ## Bounded contract and projection
 
-Each valid invocation constructs exactly one HTTPS GET, with empty body and only these ordered
-guest headers. It never retries or follows pagination; the native broker follows no redirects.
+Each valid invocation constructs exactly one request. A read is an HTTPS GET with an empty body
+and only these ordered guest headers. It never retries or follows pagination; the native broker
+follows no redirects.
 
 ```text
 accept: application/json
@@ -161,10 +195,17 @@ user-agent: dekopon-skylight-private-provider/0.1 (+https://github.com/dekopon-a
 skylight-api-version: 2026-05-01
 ```
 
-The legacy user-agent is intentionally retained. Skylight serves `include_up_for_grabs=true` chores
-only to requests that name this API version. The guest never sets `authorization`, `cookie`, or
-`content-type`. Only the broker injects the destination-bound bearer. Only status 200 is decoded;
-response headers/content type are ignored and response bodies are capped at 262,144 bytes.
+A write sends its capability's fixed method (POST, PUT or DELETE) with the same three headers,
+then `content-type: application/json`. DELETE sends that header too, with an empty body. Whether
+Skylight's write endpoints require the API-version header is unverified. The legacy user-agent is
+intentionally retained. Skylight serves `include_up_for_grabs=true` chores only to requests that
+name this API version.
+
+The guest never sets `authorization` or `cookie`, and never sets `content-type` on a read. Only
+the broker injects the destination-bound bearer. A read decodes only status 200. A write decodes a
+200 or 201 as the returned event record; a 200 or 201 without a valid record is
+`invalid-response`. A 204 yields exactly `{"ok":true}`. Response headers/content type are ignored
+and response bodies are capped at 262,144 bytes.
 
 Account retains only `data.id`: a non-empty string of at most 128 UTF-8 bytes. Frames validate all
 records before retaining the 32 lexicographically smallest IDs. IDs must be unique/non-empty and
@@ -207,7 +248,7 @@ Failures redact URI, status detail, headers, body, credentials and transport/par
 | `http-failed` | `broker HTTP request failed` |
 | `invalid-response` | `the private API returned an invalid response` |
 | `reauth-required` | `the broker credential must be replaced or re-enrolled` |
-| `forbidden` | `Skylight refused this private API read` |
+| `forbidden` | `Skylight refused this private API call` |
 | `not-found` | `the private API resource was not found` |
 | `rate-limited` | `the private API rate limit was reached` |
 | `unexpected-status` | `the private API returned an unexpected status` |
@@ -243,6 +284,16 @@ capabilities:
       skylight-private.list.items.list: {}
       skylight-private.tasks.list: {}
 ```
+
+This example lists the eight reads under a GET-only constraint set, which is today's deployment.
+Under it every write is refused before HTTP. To run a write, an owner must add three things:
+
+- the write's own `capabilities:` entry, whose `http.allowedMethods` override names exactly its
+  method (`POST`, `PUT` or `DELETE`), as the deployment's `gh.issue.comment` entry does for POST;
+- a secret-map binding for that method and path;
+- a Cedar permit naming the capability.
+
+This repository grants none of them.
 
 The provider-level `credential:` above is the legacy static path: the operator installs a short-lived
 access token out of band in the owner-only broker credential store, bound to exactly
@@ -296,8 +347,10 @@ Audit pinned to `joshuaswarren/pyskylight@69e4576b9035d71aacda9ade7a4afea05a663e
 [additional tests](https://github.com/joshuaswarren/pyskylight/blob/69e4576b9035d71aacda9ade7a4afea05a663e94/tests/test_full_coverage.py).
 There are **54 ordinary reads, 88 actions, 2 auth commands and 2 sensitive GET helpers**. “Ordinary
 read” is a source classification, not a safety grant. Actions include mutations, code/link generation
-and uploads; even sensitive GET helpers are not ordinary household reads. No mutation/auth command
-or sensitive helper is implemented. Tasks is now supported through the browser-verified chores
+and uploads; even sensitive GET helpers are not ordinary household reads. The only mutations
+implemented are the three calendar event writes (`event-add`, `event-update`, `event-delete`). They
+are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
+unverified. No other mutation, no auth command and no sensitive helper is implemented. Tasks is now supported through the browser-verified chores
 route, not an extra Python registration. All names below are Python registrations, not aliases.
 
 **Partial** means source-compatible route with intentionally bounded arguments/output. Provider
@@ -316,9 +369,9 @@ list index and populated detail included items were browser-observed. Every test
 | `frames` | Read | Partial: bounded IDs/names; no include-deleted |
 | `frame` | Read | Not implemented; out of scope |
 | `events` | Read | Partial: bounded dates/zone, optional verified include, source times/recurrence/category linkage |
-| `event-add` | Action | Not implemented; out of scope |
-| `event-update` | Action | Not implemented; out of scope |
-| `event-delete` | Action | Not implemented; out of scope |
+| `event-add` | Action | Partial: `event-add` → `calendar.events.create`; typed fields only, no `--json`/extra; ungranted, live acceptance unverified |
+| `event-update` | Action | Partial: `event-update` → `calendar.events.update`; summary/times/all-day/zone only; ungranted, live acceptance unverified |
+| `event-delete` | Action | Partial: `event-delete` → `calendar.events.delete`; ungranted, live acceptance unverified |
 | `categories` | Read | Partial: labels/flags/family-member linkage; no inferred profiles |
 | `meal-categories` | Read | Not implemented; out of scope |
 | `recipes` | Read | Not implemented; out of scope |
@@ -497,8 +550,11 @@ package, or deployment.
 
 Tests use synthetic response bodies. Native tests run without a socket; real-component tests use
 the testkit's pinned loopback HTTPS origin and broker authorization, never contact Skylight or a
-public host, and assert private response fields never appear on stdout. Model inputs cannot override
-the GET origin. Owner settings route positive real-component reads to the testkit's ephemeral HTTPS
+public host, and assert private response fields never appear on stdout. The write smoke and
+method tests in `tests/broker_host.rs` drive the built component through the pinned broker host to
+a plaintext loopback consumer under `allowPlaintextLoopback`. The consumer captures the complete
+request (request line, headers and body), and a GET-only grant refuses every write before HTTP.
+Model inputs cannot override the origin. Owner settings route positive real-component reads to the testkit's ephemeral HTTPS
 origin; native assertions verify exact joined paths and queries. Real-component conformance, denied
 broker calls and credential-destination refusals remain covered. Live vendor HTTP validation still
 requires separately authorized follow-up. The SDK's typed export uses
@@ -521,7 +577,8 @@ success still requires separately authorized validation. No credential/session d
 The component artifact ceiling is **1,048,576 bytes (1 MiB)**. The former 589,824-byte
 (576 KiB) bound predated the SDK-owned stdio bindings and typed export, which add code without
 adding ambient authority. This changes only the artifact-size gate: **128,000,000 fuel,
-32 MiB guest memory, ten seconds, one GET, 4 KiB input/request, 256 KiB response, and
+32 MiB guest memory, ten seconds, one request (a GET for reads, the fixed method for writes),
+4 KiB input/request, 256 KiB response, and
 <32 KiB component output are unchanged**. Native 20,000-record synthetic responses exercise
 bounded projection and malformed tails; real-component broker refusals exercise the configured
 host limits. Positive real-component HTTP uses synthetic loopback fixtures through owner settings. Minimal records retain lazy boxed attributes/relationships and only the final
