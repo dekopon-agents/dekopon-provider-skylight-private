@@ -55,7 +55,7 @@ providerSettings:
 ```
 
 Every route appends `/api/...` to this base, preserving a configured path prefix and encoded
-query values. SDK 0.38.0 validates the base as HTTP or HTTPS with a host and no userinfo, query,
+query values. SDK 0.75.0 validates the base as HTTP or HTTPS with a host and no userinfo, query,
 fragment or whitespace. Malformed settings and unknown keys fail before HTTP. Omitted settings
 or an empty settings object keep the default. Model inputs and CLI flags cannot set an origin.
 
