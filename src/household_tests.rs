@@ -9,6 +9,15 @@ fn input(read: Read) -> Value {
         Read::Events => {
             json!({"frameId":"frame-test", "dateMin":"2028-03-11", "dateMax":"2028-03-13", "timezone":"America/New_York"})
         }
+        Read::Messages | Read::Albums | Read::MonthInReview | Read::MonthInReviews => {
+            json!({"frameId":"frame-test"})
+        }
+        Read::Message | Read::MessageLikes | Read::MessageComments => {
+            json!({"frameId":"frame-test", "messageId":"message-test"})
+        }
+        Read::AlbumMessages | Read::AlbumMessageIds => {
+            json!({"frameId":"frame-test", "albumId":"album-test"})
+        }
     }
 }
 fn invoke(read: Read, body: Value) -> Result<Value, ProviderError> {
@@ -1978,4 +1987,261 @@ fn category_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_f
         );
         assert!(!format!("{outcome:?}").contains("secret-sentinel"));
     }
+}
+
+#[test]
+fn media_reads_are_fixed_gets_and_cli_matches_every_manifest_entry() {
+    let cases = [
+        (Read::Messages, "messages", "/messages"),
+        (Read::Message, "message", "/messages/message-test"),
+        (
+            Read::MessageLikes,
+            "message-likes",
+            "/messages/message-test/all_likes",
+        ),
+        (
+            Read::MessageComments,
+            "message-comments",
+            "/messages/message-test/comments",
+        ),
+        (Read::Albums, "albums", "/albums"),
+        (
+            Read::AlbumMessages,
+            "album-messages",
+            "/albums/album-test/messages",
+        ),
+        (
+            Read::AlbumMessageIds,
+            "album-message-ids",
+            "/albums/album-test/messages/all_ids",
+        ),
+        (Read::MonthInReview, "month-in-review", "/month_in_review"),
+        (
+            Read::MonthInReviews,
+            "month-in-reviews",
+            "/month_in_reviews",
+        ),
+    ];
+    assert_eq!(cases.len(), MEDIA_READS.len());
+    for (read, verb, path) in cases {
+        // No query: page and page_token are never sent, so pagination is never followed.
+        assert_eq!(
+            read.uri(&input(read)).unwrap(),
+            format!("{FRAMES_URI}/frame-test{path}")
+        );
+        let mut argv = vec![verb.to_owned()];
+        for (flag, key) in read.fields().iter().rev() {
+            argv.extend([
+                (*flag).to_owned(),
+                input(read)[key].as_str().unwrap().to_owned(),
+            ]);
+        }
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability,
+            input: proposed,
+            ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), read.capability());
+        assert_eq!(proposed, input(read));
+        let manifest = read.manifest();
+        assert_eq!(manifest.input_schema["additionalProperties"], false);
+        let actual = provider::manifest::<SkylightPrivate>().unwrap();
+        let declared = actual
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == manifest.id)
+            .unwrap();
+        assert_eq!(declared.description, manifest.description);
+        assert_eq!(declared.input_schema, manifest.input_schema);
+        assert_eq!(declared.effect, EffectKind::ReadOnly);
+    }
+    for read in MEDIA_READS {
+        for field in ["page", "page_token", "pageToken", "url", "include", "query"] {
+            let mut data = input(read);
+            data[field] = json!("secret-sentinel");
+            assert_eq!(
+                read.invoke(data, |_| panic!("invalid input sent"))
+                    .unwrap_err()
+                    .code(),
+                "invalid-input"
+            );
+        }
+        for value in ["/", "%2F", "?", "#", "..", "a/b", "x\r\n", "", "é", "x.y"] {
+            for (_, field) in read.fields() {
+                let mut data = input(read);
+                data[*field] = json!(value);
+                assert!(read.uri(&data).is_err(), "{read:?} {field}={value}");
+            }
+        }
+    }
+}
+
+#[test]
+fn media_projections_keep_ids_and_text_and_never_forward_media_urls() {
+    let record = |id: &str| {
+        json!({
+            "id": id,
+            "type": "message",
+            "attributes": {
+                "caption": "Synthetic beach day",
+                "created_at": "2028-03-11T09:00:00Z",
+                "asset_url": "https://media.example.invalid/secret-sentinel.jpg",
+                "thumbnail_url": "https://media.example.invalid/thumb-sentinel.jpg",
+                "url": "https://media.example.invalid/url-sentinel",
+                "file_name": "file-sentinel.jpg",
+                "width": 4032
+            },
+            "relationships": {"category": {"data": {"type": "category", "id": "category-7"}}},
+            "links": {"self": "https://media.example.invalid/link-sentinel"}
+        })
+    };
+    let many = json!({
+        "data": [record("message-2"), record("message-1")],
+        "included": [{"type": "user", "id": "user-1", "attributes": {"avatar_url": "https://media.example.invalid/avatar-sentinel", "email": "email-sentinel@example.invalid"}}],
+        "meta": {"next_page_token": "token-sentinel"},
+        "links": {"next": "https://media.example.invalid/next-sentinel"}
+    });
+    for read in MEDIA_READS {
+        let single = matches!(read, Read::Message | Read::MonthInReview);
+        let body = if single {
+            json!({"data": record("message-1")})
+        } else {
+            many.clone()
+        };
+        let output = invoke(read, body).unwrap();
+        let rendered = output.to_string();
+        for sentinel in [
+            "secret-sentinel",
+            "thumb-sentinel",
+            "url-sentinel",
+            "file-sentinel",
+            "link-sentinel",
+            "avatar-sentinel",
+            "email-sentinel",
+            "token-sentinel",
+            "next-sentinel",
+            "4032",
+        ] {
+            assert!(!rendered.contains(sentinel), "{read:?} leaked {sentinel}");
+        }
+        assert_eq!(output["coverage"], "bounded-response");
+        assert_eq!(output["upstreamCompleteness"], "unknown");
+        let first = output
+            .as_object()
+            .unwrap()
+            .iter()
+            .find_map(|(_, value)| match value {
+                Value::Array(records)
+                    if records.first().is_some_and(|r| r.get("caption").is_some()) =>
+                {
+                    records.first().cloned()
+                }
+                Value::Object(record) if record.contains_key("caption") => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{read:?} projected no record: {output}"));
+        assert_eq!(first["id"], "message-1", "{read:?}: records are ID-sorted");
+        assert_eq!(first["caption"], "Synthetic beach day");
+        assert_eq!(first["createdAt"], "2028-03-11T09:00:00Z");
+        assert_eq!(
+            first["relationships"]["category"]["data"]["id"],
+            "category-7"
+        );
+    }
+    // A non-string caption is treated as absent rather than failing the whole read.
+    let output = invoke(
+        Read::Albums,
+        json!({"data": [{"id": "album-1", "attributes": {"title": "Synthetic album", "caption": {"x": 1}}}]}),
+    )
+    .unwrap();
+    assert_eq!(output["albums"][0]["title"], "Synthetic album");
+    assert_eq!(output["albums"][0]["caption"], Value::Null);
+    // A media read rejects a malformed envelope like every other read.
+    for body in [json!({}), json!({"data": "x"}), json!([])] {
+        assert_eq!(
+            invoke(Read::Messages, body).unwrap_err().code(),
+            "invalid-response"
+        );
+    }
+}
+
+#[test]
+fn media_reads_project_included_resources_as_type_and_id_only() {
+    let body = json!({
+        "data": [{"id": "message-1", "type": "message", "attributes": {"caption": "Synthetic"}}],
+        "included": [
+            {"type": "category", "id": "category-7", "attributes": {"label": "category-label-sentinel", "color": "#123456", "linked_to_profile": true}},
+            {"type": "avatar", "id": "avatar-7", "attributes": {"name": "avatar-name-sentinel", "kind": "avatar-kind-sentinel"}},
+            {"type": "list_item", "id": "item-7", "attributes": {"label": "item-label-sentinel", "status": "pending", "section": "section-sentinel"}, "relationships": {"list": {"data": {"type": "list", "id": "list-7"}}}}
+        ]
+    });
+    for read in MEDIA_READS {
+        let single = matches!(read, Read::Message | Read::MonthInReview);
+        let mut body = body.clone();
+        if single {
+            body["data"] = body["data"][0].clone();
+        }
+        let output = invoke(read, body).unwrap();
+        let included = output["included"].as_array().unwrap();
+        assert_eq!(included.len(), 3, "{read:?}");
+        for record in included {
+            let keys: Vec<_> = record
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, ["id", "type"], "{read:?}: {record}");
+        }
+        let rendered = output.to_string();
+        for sentinel in [
+            "label-sentinel",
+            "#123456",
+            "avatar-name-sentinel",
+            "avatar-kind-sentinel",
+            "section-sentinel",
+            "list-7",
+        ] {
+            assert!(!rendered.contains(sentinel), "{read:?} leaked {sentinel}");
+        }
+    }
+    // Household reads keep their typed included attributes.
+    let lists = invoke(
+        Read::Lists,
+        json!({"data": [], "included": [{"type": "category", "id": "category-7", "attributes": {"label": "Kept"}}]}),
+    )
+    .unwrap();
+    assert_eq!(lists["included"][0]["label"], "Kept");
+}
+
+#[test]
+fn truncated_media_text_marks_the_record_and_the_output_truncated() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    for field in ["caption", "title", "body"] {
+        let record = json!({"id": "message-1", "attributes": {field: long}});
+        let many = invoke(Read::Messages, json!({"data": [record]})).unwrap();
+        assert_eq!(many["messages"][0]["textTruncated"], true, "{field}");
+        assert_eq!(many["messages"][0]["truncated"], true, "{field}");
+        assert_eq!(many["truncated"], true, "{field}");
+        assert!(
+            many["messages"][0][field]
+                .as_str()
+                .unwrap()
+                .ends_with(NAME_TRUNCATION_MARKER)
+        );
+        let one = invoke(Read::Message, json!({"data": record})).unwrap();
+        assert_eq!(one["message"]["textTruncated"], true, "{field}");
+        assert_eq!(one["message"]["truncated"], true, "{field}");
+        assert_eq!(one["truncated"], true, "{field}");
+    }
+    let exact = invoke(
+        Read::Messages,
+        json!({"data": [{"id": "message-1", "attributes": {"caption": "x".repeat(MAX_NAME_BYTES)}}]}),
+    )
+    .unwrap();
+    assert_eq!(exact["messages"][0]["truncated"], false);
+    assert_eq!(exact["truncated"], false);
 }

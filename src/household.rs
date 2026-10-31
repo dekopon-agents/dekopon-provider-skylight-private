@@ -29,6 +29,37 @@ impl ListInput {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MessageInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    message_id: String,
+}
+impl MessageInput {
+    pub(crate) fn new(frame_id: String, message_id: String) -> Self {
+        Self {
+            frame_id,
+            message_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AlbumInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    album_id: String,
+}
+impl AlbumInput {
+    pub(crate) fn new(frame_id: String, album_id: String) -> Self {
+        Self { frame_id, album_id }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EventsInput {
     #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
     frame_id: String,
@@ -130,6 +161,15 @@ pub(crate) enum Read {
     List,
     Items,
     Tasks,
+    Messages,
+    Message,
+    MessageLikes,
+    MessageComments,
+    Albums,
+    AlbumMessages,
+    AlbumMessageIds,
+    MonthInReview,
+    MonthInReviews,
 }
 
 #[cfg(test)]
@@ -140,6 +180,19 @@ pub(crate) const READS: [Read; 6] = [
     Read::List,
     Read::Items,
     Read::Tasks,
+];
+/// Photo, message, album and month-in-review reads (INVENTORY rows 88-111, B11).
+#[cfg(test)]
+pub(crate) const MEDIA_READS: [Read; 9] = [
+    Read::Messages,
+    Read::Message,
+    Read::MessageLikes,
+    Read::MessageComments,
+    Read::Albums,
+    Read::AlbumMessages,
+    Read::AlbumMessageIds,
+    Read::MonthInReview,
+    Read::MonthInReviews,
 ];
 const MAX_RECORDS: usize = 64;
 const EVENT_INCLUDE: &str = "categories,calendar_account,event_notification_setting";
@@ -155,17 +208,40 @@ impl Read {
             Self::List => "skylight-private.lists.read",
             Self::Items => "skylight-private.list.items.list",
             Self::Tasks => "skylight-private.tasks.list",
+            Self::Messages => "skylight-private.messages.list",
+            Self::Message => "skylight-private.messages.read",
+            Self::MessageLikes => "skylight-private.messages.likes.list",
+            Self::MessageComments => "skylight-private.messages.comments.list",
+            Self::Albums => "skylight-private.albums.list",
+            Self::AlbumMessages => "skylight-private.albums.messages.list",
+            Self::AlbumMessageIds => "skylight-private.albums.message-ids.list",
+            Self::MonthInReview => "skylight-private.month-in-review.read",
+            Self::MonthInReviews => "skylight-private.month-in-review.list",
         }
     }
 
     #[cfg(test)]
     pub(crate) fn from_capability(id: &str) -> Option<Self> {
-        READS.into_iter().find(|read| read.capability() == id)
+        READS
+            .into_iter()
+            .chain(MEDIA_READS)
+            .find(|read| read.capability() == id)
     }
 
     pub(crate) fn fields(self) -> &'static [(&'static str, &'static str)] {
         match self {
-            Self::Categories | Self::Lists => &[("--frame", "frameId")],
+            Self::Categories
+            | Self::Lists
+            | Self::Messages
+            | Self::Albums
+            | Self::MonthInReview
+            | Self::MonthInReviews => &[("--frame", "frameId")],
+            Self::Message | Self::MessageLikes | Self::MessageComments => {
+                &[("--frame", "frameId"), ("--message", "messageId")]
+            }
+            Self::AlbumMessages | Self::AlbumMessageIds => {
+                &[("--frame", "frameId"), ("--album", "albumId")]
+            }
             Self::List | Self::Items => &[("--frame", "frameId"), ("--list", "listId")],
             Self::Events => &[
                 ("--frame", "frameId"),
@@ -197,7 +273,7 @@ impl Read {
         let mut properties = serde_json::Map::new();
         for (_, field) in self.fields() {
             let schema = match *field {
-                "frameId" | "listId" => {
+                "frameId" | "listId" | "messageId" | "albumId" => {
                     json!({"type":"string", "minLength":1, "maxLength":128, "pattern":"^[A-Za-z0-9_-]+$"})
                 }
                 "dateMin" | "dateMax" | "after" | "before" => {
@@ -227,11 +303,33 @@ impl Read {
                 Self::Items => {
                     "Lists bounded list item labels and source statuses; not dated assigned Tasks"
                 }
+                read => read.media_description(),
             }
             .to_owned(),
             effect: EffectKind::ReadOnly,
             risk: RiskLevel::Medium,
             input_schema: json!({"type":"object", "properties":properties, "required":self.fields().iter().filter(|(_, key)| self.required(key)).map(|(_, key)| *key).collect::<Vec<_>>(), "additionalProperties":false}),
+        }
+    }
+
+    /// The manifest descriptions of the media reads; their `read_capability!` calls repeat them.
+    #[cfg(test)]
+    fn media_description(self) -> &'static str {
+        match self {
+            Self::Messages => {
+                "Lists bounded photo message identifiers and captions; never media URLs; first page only"
+            }
+            Self::Message => "Reads one photo message's identifier and caption; never media URLs",
+            Self::MessageLikes => "Lists bounded likes on one photo message; never media URLs",
+            Self::MessageComments => {
+                "Lists bounded comments on one photo message; never media URLs"
+            }
+            Self::Albums => "Lists bounded album identifiers and titles; never media URLs",
+            Self::AlbumMessages => "Lists bounded photo messages in one album; never media URLs",
+            Self::AlbumMessageIds => "Lists the photo message identifiers in one album",
+            Self::MonthInReview => "Reads the current month-in-review identifier; never media URLs",
+            Self::MonthInReviews => "Lists bounded month-in-review identifiers; never media URLs",
+            _ => unreachable!("not a media read"),
         }
     }
 
@@ -256,9 +354,28 @@ impl Read {
         let frame = field("frameId")?;
         safe_segment(frame)?;
         let base = format!("{FRAMES_URI}/{frame}");
+        let selector = |key: &str| {
+            let value = field(key)?;
+            safe_segment(value)?;
+            Ok::<_, ProviderError>(value)
+        };
         Ok(match self {
             Self::Categories => format!("{base}/categories"),
             Self::Lists => format!("{base}/lists"),
+            // Pagination is never followed: the first page is all a read returns.
+            Self::Messages => format!("{base}/messages"),
+            Self::Message => format!("{base}/messages/{}", selector("messageId")?),
+            Self::MessageLikes => format!("{base}/messages/{}/all_likes", selector("messageId")?),
+            Self::MessageComments => {
+                format!("{base}/messages/{}/comments", selector("messageId")?)
+            }
+            Self::Albums => format!("{base}/albums"),
+            Self::AlbumMessages => format!("{base}/albums/{}/messages", selector("albumId")?),
+            Self::AlbumMessageIds => {
+                format!("{base}/albums/{}/messages/all_ids", selector("albumId")?)
+            }
+            Self::MonthInReview => format!("{base}/month_in_review"),
+            Self::MonthInReviews => format!("{base}/month_in_reviews"),
             Self::List | Self::Items => {
                 let list = field("listId")?;
                 safe_segment(list)?;
@@ -345,6 +462,16 @@ impl Read {
             Self::List => project(body, "list", true, ProjectionKind::List),
             Self::Items => project(body, "items", false, ProjectionKind::Item),
             Self::Tasks => project(body, "tasks", false, ProjectionKind::Task),
+            Self::Messages | Self::AlbumMessages => {
+                project(body, "messages", false, ProjectionKind::Media)
+            }
+            Self::Message => project(body, "message", true, ProjectionKind::Media),
+            Self::MessageLikes => project(body, "likes", false, ProjectionKind::Media),
+            Self::MessageComments => project(body, "comments", false, ProjectionKind::Media),
+            Self::Albums => project(body, "albums", false, ProjectionKind::Media),
+            Self::AlbumMessageIds => project(body, "messageIds", false, ProjectionKind::Media),
+            Self::MonthInReview => project(body, "monthInReview", true, ProjectionKind::Media),
+            Self::MonthInReviews => project(body, "monthInReviews", false, ProjectionKind::Media),
         }
     }
 }
@@ -1538,6 +1665,23 @@ struct Attributes {
     start_time: Nullable<serde::de::IgnoredAny>,
     #[serde(default)]
     name: Nullable<String>,
+    #[serde(default)]
+    caption: LenientText,
+    #[serde(default)]
+    title: LenientText,
+    #[serde(default)]
+    body: LenientText,
+}
+
+#[derive(Default)]
+struct LenientText(Option<String>);
+impl<'de> Deserialize<'de> for LenientText {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(text) => Self(Some(text)),
+            _ => Self(None),
+        })
+    }
 }
 #[derive(Clone, Copy)]
 enum ProjectionKind {
@@ -1547,6 +1691,7 @@ enum ProjectionKind {
     Item,
     Task,
     Included,
+    Media,
 }
 impl Attributes {
     fn text_truncated(&self) -> bool {
@@ -1564,6 +1709,9 @@ impl Attributes {
         ]
         .iter()
         .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
+            || [&self.caption, &self.title, &self.body]
+                .iter()
+                .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
     }
     fn validate(&self) -> Result<bool, ProviderError> {
         for value in [
@@ -1686,6 +1834,23 @@ impl Attributes {
                 } else {
                     "null-or-missing"
                 });
+                output["textTruncated"] = json!(truncated);
+                Ok(output)
+            }
+            // Media URLs, file names and dimensions are never read, so they cannot be projected.
+            ProjectionKind::Media => {
+                let mut truncated = false;
+                let mut output = json!({});
+                for (key, value) in [
+                    ("caption", self.caption.0),
+                    ("title", self.title.0),
+                    ("body", self.body.0),
+                ] {
+                    truncated |= text(&mut output, key, Nullable(value));
+                }
+                output["createdAt"] = json!(self.created_at.0);
+                output["attributesCoverage"] =
+                    json!("known-fields-only; media-urls-never-projected");
                 output["textTruncated"] = json!(truncated);
                 Ok(output)
             }
@@ -2062,8 +2227,17 @@ fn project(
         Some(r) => (
             r.selected
                 .into_values()
-                .map(|r| r.fields(ProjectionKind::Included))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|r| {
+                    let mut record = r.fields(ProjectionKind::Included)?;
+                    if matches!(kind, ProjectionKind::Media) {
+                        record
+                            .as_object_mut()
+                            .expect("typed projection object")
+                            .retain(|key, _| key == "id" || key == "type");
+                    }
+                    Ok(record)
+                })
+                .collect::<Result<Vec<_>, ProviderError>>()?,
             r.total,
             r.text_truncated,
         ),

@@ -158,6 +158,42 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
             "skylight-private.tasks.list",
             json!({"frameId":"frame-test","after":"2028-03-11","before":"2028-03-11"}),
         ),
+        (
+            "skylight-private.messages.list",
+            json!({"frameId":"frame-test"}),
+        ),
+        (
+            "skylight-private.messages.read",
+            json!({"frameId":"frame-test","messageId":"message-test"}),
+        ),
+        (
+            "skylight-private.messages.likes.list",
+            json!({"frameId":"frame-test","messageId":"message-test"}),
+        ),
+        (
+            "skylight-private.messages.comments.list",
+            json!({"frameId":"frame-test","messageId":"message-test"}),
+        ),
+        (
+            "skylight-private.albums.list",
+            json!({"frameId":"frame-test"}),
+        ),
+        (
+            "skylight-private.albums.messages.list",
+            json!({"frameId":"frame-test","albumId":"album-test"}),
+        ),
+        (
+            "skylight-private.albums.message-ids.list",
+            json!({"frameId":"frame-test","albumId":"album-test"}),
+        ),
+        (
+            "skylight-private.month-in-review.read",
+            json!({"frameId":"frame-test"}),
+        ),
+        (
+            "skylight-private.month-in-review.list",
+            json!({"frameId":"frame-test"}),
+        ),
     ];
     assert_eq!(
         registry

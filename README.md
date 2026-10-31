@@ -7,8 +7,8 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its twenty-two ordered capabilities are independently grantable.
-The eight reads are Medium-risk and read-only (`ReadOnly`). The fourteen writes are
+`dekopon.dev/provider/v1alpha1`. Its thirty-one ordered capabilities are independently grantable.
+The seventeen reads are Medium-risk and read-only (`ReadOnly`). The fourteen writes are
 `ExternalWrite`: three calendar event writes, four list item writes, three list writes and four
 category writes. Creates, updates and completes are High risk; deletes are Critical. Because they are not
 `ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
@@ -40,6 +40,16 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.categories.find-or-create` | POST `/frames/{frameId}/categories/find_or_create` | `category`: the found or created record; `{"ok":true}` on 204 |
 | `skylight-private.categories.update` | PATCH `/frames/{frameId}/categories/{categoryId}` | `category`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.categories.delete` | DELETE `/frames/{frameId}/categories/{categoryId}[?reassign_to_id={categoryId}]` | `category` when a record is returned; `{"ok":true}` on 204 |
+
+| `skylight-private.messages.list` | `/frames/{frameId}/messages` (first page only) | `messages`: IDs, captions, created times, linkage; never media URLs |
+| `skylight-private.messages.read` | `/frames/{frameId}/messages/{messageId}` | `message`: the same fields for one message |
+| `skylight-private.messages.likes.list` | `/frames/{frameId}/messages/{messageId}/all_likes` | `likes`: IDs, created times, linkage |
+| `skylight-private.messages.comments.list` | `/frames/{frameId}/messages/{messageId}/comments` | `comments`: IDs, bodies, created times, linkage |
+| `skylight-private.albums.list` | `/frames/{frameId}/albums` | `albums`: IDs, titles, created times |
+| `skylight-private.albums.messages.list` | `/frames/{frameId}/albums/{albumId}/messages` | `messages`: as `messages.list`, for one album |
+| `skylight-private.albums.message-ids.list` | `/frames/{frameId}/albums/{albumId}/messages/all_ids` | `messageIds`: message IDs |
+| `skylight-private.month-in-review.read` | `/frames/{frameId}/month_in_review` | `monthInReview`: ID, created time, linkage |
+| `skylight-private.month-in-review.list` | `/frames/{frameId}/month_in_reviews` | `monthInReviews`: IDs, created times, linkage |
 
 The reads' routes are GETs.
 
@@ -92,6 +102,9 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `lists --frame ID` | `frameId` |
 | `list-show --frame ID --list ID` | `frameId`, `listId` |
 | `list-items --frame ID --list ID` | `frameId`, `listId` |
+| `messages --frame ID`, `albums --frame ID`, `month-in-review --frame ID`, `month-in-reviews --frame ID` | `frameId` |
+| `message`, `message-likes`, `message-comments` `--frame ID --message ID` | `frameId`, `messageId` |
+| `album-messages`, `album-message-ids` `--frame ID --album ID` | `frameId`, `albumId` |
 | `event-add --frame ID --summary TEXT [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE] [--category ID]... [--rrule RULE]...` | `frameId`, `summary`; optional `startsAt`, `endsAt`, `allDay`, `timezone`, arrays `categoryIds`, `rrule` |
 | `event-update --frame ID --event ID [--summary TEXT] [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE]` | `frameId`, `eventId` and at least one optional field |
 | `event-delete --frame ID --event ID` | `frameId`, `eventId` |
@@ -153,6 +166,22 @@ The list item writes take the same bounded text rules as the event writes:
 bodies are flat JSON in that field order, with absent fields omitted, following
 `joshuaswarren/pyskylight`'s `add_list_item`, `update_list_item` and `complete_list_item`.
 pyskylight's `extra` passthrough on update is not offered.
+
+### Photo and message reads
+
+The photo, message, album and month-in-review reads are unverified against the live API. Their
+routes come from `joshuaswarren/pyskylight`'s client source, and no response shape for them is
+documented, so each is projected through the same JSON:API envelope as the other reads:
+
+- Each record keeps `id`, `type`, `createdAt`, known linkage, and `caption`, `title` or `body` when
+  the source gives a string. Those three names are the ones pyskylight's message, album and comment
+  write bodies use.
+- Every other attribute is never read. That covers asset, thumbnail and share URLs, file names,
+  dimensions, links and pagination tokens, so no media URL can reach the output.
+- Included resources keep only their type and ID.
+- `messages` sends no `page` or `page_token`, so only the first page is read, and pagination is
+  never followed.
+- A response that is not that envelope is `invalid-response`.
 
 ### List writes
 
@@ -356,7 +385,7 @@ capabilities:
       skylight-private.tasks.list: {}
 ```
 
-This example lists the eight reads under a GET-only constraint set, which is today's deployment.
+This example lists the eight original reads under a GET-only constraint set, which is today's deployment. The nine photo, message and album reads are `ReadOnly`, so they join `skylight-private:read-only` and its permits. Like any capability, though, each runs only once it has its own `capabilities:` entry and a GET binding, and this example lists none of them.
 Under it every write is refused before HTTP. To run a write, an owner must add three things:
 
 - the write's own `capabilities:` entry, whose `http.allowedMethods` override names exactly its
@@ -524,30 +553,30 @@ list index and populated detail included items were browser-observed. Every test
 | `reward-unredeem` | Action | Not implemented; out of scope |
 | `reward-points` | Read | Not implemented; out of scope |
 | `reward-points-set` | Action | Not implemented; out of scope |
-| `messages` | Read | Not implemented; out of scope |
-| `message` | Read | Not implemented; out of scope |
+| `messages` | Read | Partial: `messages` → `messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message` | Read | Partial: `message` → `messages.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `message-delete` | Action | Not implemented; out of scope |
 | `messages-delete` | Action | Not implemented; out of scope |
 | `messages-copy` | Action | Not implemented; out of scope |
 | `message-caption` | Action | Not implemented; out of scope |
-| `message-likes` | Read | Not implemented; out of scope |
+| `message-likes` | Read | Partial: `message-likes` → `messages.likes.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `message-like` | Action | Not implemented; out of scope |
 | `message-unlike` | Action | Not implemented; out of scope |
-| `message-comments` | Read | Not implemented; out of scope |
+| `message-comments` | Read | Partial: `message-comments` → `messages.comments.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `message-comment-add` | Action | Not implemented; out of scope |
 | `message-comment-delete` | Action | Not implemented; out of scope |
 | `photo-upload` | Action | Not implemented; out of scope |
 | `upload-credentials` | Sensitive GET helper | Not implemented; out of scope |
-| `albums` | Read | Not implemented; out of scope |
+| `albums` | Read | Partial: `albums` → `albums.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `album-add` | Action | Not implemented; out of scope |
 | `album-update` | Action | Not implemented; out of scope |
 | `album-delete` | Action | Not implemented; out of scope |
-| `album-messages` | Read | Not implemented; out of scope |
-| `album-message-ids` | Read | Not implemented; out of scope |
+| `album-messages` | Read | Partial: `album-messages` → `albums.messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `album-message-ids` | Read | Partial: `album-message-ids` → `albums.message-ids.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `album-add-photos` | Action | Not implemented; out of scope |
 | `album-remove-photos` | Action | Not implemented; out of scope |
-| `month-in-review` | Read | Not implemented; out of scope |
-| `month-in-reviews` | Read | Not implemented; out of scope |
+| `month-in-review` | Read | Partial: `month-in-review` → `month-in-review.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `month-in-reviews` | Read | Partial: `month-in-reviews` → `month-in-review.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
 | `avatars` | Read | Not implemented; out of scope |
 | `colors` | Read | Not implemented; out of scope |
 | `activities` | Read | Not implemented; out of scope |
