@@ -864,7 +864,7 @@ fn each_event_write_sends_one_request_with_its_exact_method_uri_headers_and_json
 }
 
 #[test]
-fn write_responses_project_the_returned_record_and_only_a_204_is_bare_ok() {
+fn write_2xx_responses_project_the_record_or_succeed_without_one_and_never_invite_a_retry() {
     for write in WRITES {
         let (key, text, record) = write_record(write);
         let record = record.to_string();
@@ -886,12 +886,25 @@ fn write_responses_project_the_returned_record_and_only_a_204_is_bare_ok() {
             .invoke(write_input(write), |_| Ok(write_response(204, b"")))
             .unwrap();
         assert_eq!(output, json!({"ok": true}), "{write:?}");
+        // The write applied: an unprojectable or oversized record is a success without a
+        // record, never an error a caller would retry.
+        let oversized = vec![b' '; MAX_RESPONSE_BODY_BYTES + 1];
         for status in [200, 201] {
-            for body in [b"".as_slice(), b"{}", br#"{"data":null}"#, b"not json"] {
-                let error = write
+            for body in [
+                b"".as_slice(),
+                b"{}",
+                br#"{"data":null}"#,
+                b"not json",
+                &oversized,
+            ] {
+                let output = write
                     .invoke(write_input(write), |_| Ok(write_response(status, body)))
-                    .unwrap_err();
-                assert_eq!(error.code(), "invalid-response", "{write:?} {status}");
+                    .unwrap();
+                assert_eq!(
+                    output,
+                    json!({"ok": true, "recordProjected": false}),
+                    "{write:?} {status}"
+                );
             }
         }
         for (status, code) in [

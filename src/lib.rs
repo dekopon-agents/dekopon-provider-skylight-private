@@ -476,7 +476,7 @@ fn validate_empty_input(input: Value) -> Result<(), ProviderError> {
 /// Performs exactly one broker call with the capability's fixed method and maps all host detail
 /// away. A GET carries no body and no content-type and succeeds only on 200. A write always
 /// carries `content-type: application/json` (DELETE too, with an empty body) and succeeds on 200
-/// or 201 with the returned record, or on 204, which yields `None`.
+/// or 201 with the returned record (empty when oversized), or on 204, which yields `None`.
 fn send_once<F>(
     method: &'static str,
     uri: &str,
@@ -505,7 +505,13 @@ where
         (_, status) => return Err(status_error(status)),
     }
     if response.body.len() > MAX_RESPONSE_BODY_BYTES {
-        return Err(invalid_response());
+        // A write's 2xx means the change applied: hand back no record rather than an error,
+        // so the write projection reports success without one and a caller does not retry.
+        return if write {
+            Ok(Some(Vec::new()))
+        } else {
+            Err(invalid_response())
+        };
     }
     Ok(Some(response.body))
 }

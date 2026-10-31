@@ -228,10 +228,13 @@ intentionally retained. Skylight serves `include_up_for_grabs=true` chores only 
 name this API version.
 
 The guest never sets `authorization` or `cookie`, and never sets `content-type` on a read. Only
-the broker injects the destination-bound bearer. A read decodes only status 200. A write decodes a
-200 or 201 as the returned event record; a 200 or 201 without a valid record is
-`invalid-response`. A 204 yields exactly `{"ok":true}`. Response headers/content type are ignored
-and response bodies are capped at 262,144 bytes.
+the broker injects the destination-bound bearer. A read decodes only status 200. Response headers
+and content type are ignored, and response bodies are capped at 262,144 bytes.
+
+A write decodes a 200 or 201 as the returned record (`event` or `item`), and a 204 yields exactly
+`{"ok":true}`. A 2xx means the write applied, so a write never fails after one. A 200 or 201 whose
+body is missing, malformed or over the cap yields `{"ok":true,"recordProjected":false}`, not
+`invalid-response`, so that a caller does not retry and repeat the write.
 
 Account retains only `data.id`: a non-empty string of at most 128 UTF-8 bytes. Frames validate all
 records before retaining the 32 lexicographically smallest IDs. IDs must be unique/non-empty and

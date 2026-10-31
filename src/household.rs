@@ -940,16 +940,19 @@ impl Mutation {
         }
     }
 
-    /// A 200 or 201 must carry the written record, DELETE included; only a 204 has none.
+    /// A 200 or 201 projects the written record, DELETE included. The write has applied by then,
+    /// so a record that cannot be projected still succeeds, marked `recordProjected:false`,
+    /// rather than failing and inviting a retry that would repeat the write.
     pub(crate) fn project_body(self, body: &[u8]) -> Result<Value, ProviderError> {
-        match self {
+        let projected = match self {
             Self::EventCreate | Self::EventUpdate | Self::EventDelete => {
                 project(body, "event", true, ProjectionKind::Event)
             }
             Self::ItemCreate | Self::ItemUpdate | Self::ItemComplete | Self::ItemDelete => {
                 project(body, "item", true, ProjectionKind::Item)
             }
-        }
+        };
+        Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }
 }
 
