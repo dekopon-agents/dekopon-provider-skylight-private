@@ -104,8 +104,7 @@ pub struct SkylightPrivate;
 impl Provider for SkylightPrivate {
     const ID: &'static str = "skylight-private";
     const COMMAND_WORDS: &'static [&'static str] = &[COMMAND_WORD];
-    const DESCRIPTION: &'static str =
-        "Unsupported private Skylight household reads and calendar event writes over broker HTTP";
+    const DESCRIPTION: &'static str = "Unsupported private Skylight household reads and calendar event and list item writes over broker HTTP";
     type Args = commands::Args;
     type Capabilities = (
         Account,
@@ -119,6 +118,10 @@ impl Provider for SkylightPrivate {
         EventCreate,
         EventUpdate,
         EventDelete,
+        ItemCreate,
+        ItemUpdate,
+        ItemComplete,
+        ItemDelete,
     );
 
     fn propose(args: Self::Args, _stdin_piped: bool) -> Result<Proposal<Self>, Usage> {
@@ -313,6 +316,54 @@ read_capability!(
     |input: &Value| household::Mutation::EventDelete.uri(input),
     |input: &Value| household::Mutation::EventDelete.body(input),
     |body: &[u8]| household::Mutation::EventDelete.project_body(body)
+);
+read_capability!(
+    ItemCreate,
+    "list.items.create",
+    "Adds one list item with a bounded label and optional section",
+    household::ItemCreateInput,
+    method::POST,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::ItemCreate.uri(input),
+    |input: &Value| household::Mutation::ItemCreate.body(input),
+    |body: &[u8]| household::Mutation::ItemCreate.project_body(body)
+);
+read_capability!(
+    ItemUpdate,
+    "list.items.update",
+    "Updates one list item's label, pending/completed status or position",
+    household::ItemUpdateInput,
+    method::PUT,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::ItemUpdate.uri(input),
+    |input: &Value| household::Mutation::ItemUpdate.body(input),
+    |body: &[u8]| household::Mutation::ItemUpdate.project_body(body)
+);
+read_capability!(
+    ItemComplete,
+    "list.items.complete",
+    "Marks one list item completed, or pending again",
+    household::ItemCompleteInput,
+    method::PUT,
+    EffectKind::ExternalWrite,
+    RiskLevel::High,
+    |input: &Value| household::Mutation::ItemComplete.uri(input),
+    |input: &Value| household::Mutation::ItemComplete.body(input),
+    |body: &[u8]| household::Mutation::ItemComplete.project_body(body)
+);
+read_capability!(
+    ItemDelete,
+    "list.items.delete",
+    "Deletes one list item by identifier",
+    household::ItemDeleteInput,
+    method::DELETE,
+    EffectKind::ExternalWrite,
+    RiskLevel::Critical,
+    |input: &Value| household::Mutation::ItemDelete.uri(input),
+    |input: &Value| household::Mutation::ItemDelete.body(input),
+    |body: &[u8]| household::Mutation::ItemDelete.project_body(body)
 );
 
 #[allow(unsafe_code)]
@@ -858,6 +909,10 @@ mod tests {
                 "skylight-private.calendar.events.delete",
                 RiskLevel::Critical,
             ),
+            ("skylight-private.list.items.create", RiskLevel::High),
+            ("skylight-private.list.items.update", RiskLevel::High),
+            ("skylight-private.list.items.complete", RiskLevel::High),
+            ("skylight-private.list.items.delete", RiskLevel::Critical),
         ];
         assert_eq!(
             manifest
@@ -1327,7 +1382,7 @@ mod tests {
         let manifest = provider::manifest::<SkylightPrivate>().unwrap();
         assert_eq!(manifest.id.as_str(), "skylight-private");
         assert_eq!(manifest.command_words, ["skylight"]);
-        assert_eq!(manifest.capabilities.len(), 11);
+        assert_eq!(manifest.capabilities.len(), 15);
         for capability in &manifest.capabilities {
             assert!(capability.id.as_str().starts_with("skylight-private."));
         }

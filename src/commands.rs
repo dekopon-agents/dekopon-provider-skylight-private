@@ -3,14 +3,14 @@ use clap::{Parser, Subcommand};
 use dekopon_provider_sdk::provider::{Capability, Proposal, Usage};
 
 use crate::{
-    Account, Categories, EventCreate, EventDelete, EventUpdate, Events, Frames, Items, List, Lists,
-    SkylightPrivate, Tasks, household,
+    Account, Categories, EventCreate, EventDelete, EventUpdate, Events, Frames, ItemComplete,
+    ItemCreate, ItemDelete, ItemUpdate, Items, List, Lists, SkylightPrivate, Tasks, household,
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "skylight",
-    about = "Unsupported private Skylight household reads and calendar event writes over broker HTTP",
+    about = "Unsupported private Skylight household reads and calendar event and list item writes over broker HTTP",
     disable_version_flag = true
 )]
 pub struct Args {
@@ -110,6 +110,48 @@ enum Command {
         #[arg(long)]
         event: String,
     },
+    ListAdd {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        section: Option<String>,
+    },
+    ListItemUpdate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+        #[arg(long)]
+        item: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        position: Option<u64>,
+    },
+    ListItemComplete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+        #[arg(long)]
+        item: String,
+        #[arg(long)]
+        status: Option<String>,
+    },
+    ListItemDelete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        list: String,
+        #[arg(long)]
+        item: String,
+    },
 }
 
 pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
@@ -196,6 +238,39 @@ pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
                 household::Mutation::EventDelete.uri(input)
             })?
         }
+        Command::ListAdd {
+            frame,
+            list,
+            label,
+            section,
+        } => checked::<ItemCreate>(
+            household::ItemCreateInput::new(frame, list, label, section),
+            |input| household::Mutation::ItemCreate.uri(input),
+        )?,
+        Command::ListItemUpdate {
+            frame,
+            list,
+            item,
+            label,
+            status,
+            position,
+        } => checked::<ItemUpdate>(
+            household::ItemUpdateInput::new(frame, list, item, label, status, position),
+            |input| household::Mutation::ItemUpdate.uri(input),
+        )?,
+        Command::ListItemComplete {
+            frame,
+            list,
+            item,
+            status,
+        } => checked::<ItemComplete>(
+            household::ItemCompleteInput::new(frame, list, item, status),
+            |input| household::Mutation::ItemComplete.uri(input),
+        )?,
+        Command::ListItemDelete { frame, list, item } => checked::<ItemDelete>(
+            household::ItemDeleteInput::new(frame, list, item),
+            |input| household::Mutation::ItemDelete.uri(input),
+        )?,
     };
     Ok(proposal)
 }

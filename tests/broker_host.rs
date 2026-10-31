@@ -243,6 +243,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
 }
 
 const EVENTS_TARGET: &str = "/skylight/api/frames/frame-test/calendar_events";
+const ITEMS_TARGET: &str = "/skylight/api/frames/frame-test/lists/list-test/list_items";
 /// The same bytes the native create test pins (`src/household_tests.rs`).
 const CREATE_BODY: &str = r#"{"summary":"Dentist","starts_at":"2028-03-11T09:00:00-05:00","ends_at":"2028-03-11T10:00:00-05:00","all_day":false,"timezone":"America/New_York","category_ids":["category-1","category-2"],"rrule":["RRULE:FREQ=WEEKLY;COUNT=2"]}"#;
 
@@ -259,7 +260,7 @@ fn create_input() -> Value {
     })
 }
 
-fn writes() -> [(&'static str, &'static str, Value, String); 3] {
+fn writes() -> [(&'static str, &'static str, Value, String); 7] {
     [
         (
             "skylight-private.calendar.events.create",
@@ -278,6 +279,30 @@ fn writes() -> [(&'static str, &'static str, Value, String); 3] {
             "DELETE",
             json!({"frameId":"frame-test","eventId":"event-7"}),
             format!("{EVENTS_TARGET}/event-7"),
+        ),
+        (
+            "skylight-private.list.items.create",
+            "POST",
+            json!({"frameId":"frame-test","listId":"list-test","label":"Milk"}),
+            ITEMS_TARGET.to_owned(),
+        ),
+        (
+            "skylight-private.list.items.update",
+            "PUT",
+            json!({"frameId":"frame-test","listId":"list-test","itemId":"item-7","position":2}),
+            format!("{ITEMS_TARGET}/item-7"),
+        ),
+        (
+            "skylight-private.list.items.complete",
+            "PUT",
+            json!({"frameId":"frame-test","listId":"list-test","itemId":"item-7"}),
+            format!("{ITEMS_TARGET}/item-7"),
+        ),
+        (
+            "skylight-private.list.items.delete",
+            "DELETE",
+            json!({"frameId":"frame-test","listId":"list-test","itemId":"item-7"}),
+            format!("{ITEMS_TARGET}/item-7"),
         ),
     ]
 }

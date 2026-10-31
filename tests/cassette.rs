@@ -86,13 +86,17 @@ fn authored_household_cassette_replays_with_exact_prefix_and_query()
 }
 
 #[test]
-fn authored_event_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
+fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
 -> Result<(), Box<dyn std::error::Error>> {
     let base = "https://fixture.example.test/skylight";
     for raw in [
         include_str!("cassettes/skylight-private/0002-POST-calendar-events.json"),
         include_str!("cassettes/skylight-private/0003-PUT-calendar-event.json"),
         include_str!("cassettes/skylight-private/0004-DELETE-calendar-event.json"),
+        include_str!("cassettes/skylight-private/0005-POST-list-items.json"),
+        include_str!("cassettes/skylight-private/0006-PUT-list-item.json"),
+        include_str!("cassettes/skylight-private/0007-PUT-list-item-complete.json"),
+        include_str!("cassettes/skylight-private/0008-DELETE-list-item.json"),
     ] {
         let exchange: Value = serde_json::from_str(raw)?;
         assert_eq!(exchange["version"], 1);
@@ -164,15 +168,16 @@ fn authored_event_write_cassettes_replay_with_exact_method_prefix_headers_and_bo
             assert_eq!(projected, json!({"ok": true}));
         } else {
             let record = &reply["body"]["json"]["data"];
-            assert_eq!(projected["event"]["id"], record["id"]);
-            assert_eq!(
-                projected["event"]["summary"],
-                record["attributes"]["summary"]
-            );
-            assert_eq!(
-                projected["event"]["startsAt"],
-                record["attributes"]["starts_at"]
-            );
+            let attributes = &record["attributes"];
+            if capability.contains(".calendar.events.") {
+                assert_eq!(projected["event"]["id"], record["id"]);
+                assert_eq!(projected["event"]["summary"], attributes["summary"]);
+                assert_eq!(projected["event"]["startsAt"], attributes["starts_at"]);
+            } else {
+                assert_eq!(projected["item"]["id"], record["id"]);
+                assert_eq!(projected["item"]["label"], attributes["label"]);
+                assert_eq!(projected["item"]["status"], attributes["status"]);
+            }
         }
         let component = std::env::var_os("DEKOPON_PROVIDER_COMPONENT")
             .expect("DEKOPON_PROVIDER_COMPONENT must name the freshly built component");

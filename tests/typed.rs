@@ -39,7 +39,7 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     conformance::<SkylightPrivate>(component())?;
     let manifest = provider::manifest::<SkylightPrivate>()?;
     assert_eq!(manifest.id.as_str(), "skylight-private");
-    assert_eq!(manifest.capabilities.len(), 11);
+    assert_eq!(manifest.capabilities.len(), 15);
     let expected_ids = [
         ACCOUNT,
         FRAMES,
@@ -52,6 +52,10 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
         "skylight-private.calendar.events.create",
         "skylight-private.calendar.events.update",
         "skylight-private.calendar.events.delete",
+        "skylight-private.list.items.create",
+        "skylight-private.list.items.update",
+        "skylight-private.list.items.complete",
+        "skylight-private.list.items.delete",
     ];
     assert_eq!(
         manifest
@@ -87,6 +91,28 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     assert_eq!(
         manifest.capabilities[10].input_schema["required"],
         json!(["frameId", "eventId"])
+    );
+    let item_create = &manifest.capabilities[11].input_schema;
+    assert_eq!(
+        item_create["required"],
+        json!(["frameId", "listId", "label"])
+    );
+    assert_eq!(item_create["properties"]["label"]["maxLength"], 256);
+    let item_update = &manifest.capabilities[12].input_schema;
+    assert_eq!(item_update["minProperties"], 4);
+    assert_eq!(
+        item_update["properties"]["status"]["enum"],
+        json!(["completed", "pending"])
+    );
+    assert_eq!(item_update["properties"]["position"]["maximum"], 1_000_000);
+    let item_complete = &manifest.capabilities[13].input_schema;
+    assert_eq!(
+        item_complete["properties"]["status"]["default"],
+        "completed"
+    );
+    assert_eq!(
+        manifest.capabilities[14].input_schema["required"],
+        json!(["frameId", "listId", "itemId"])
     );
     let frame = &manifest.capabilities[2].input_schema["properties"]["frameId"];
     assert_eq!(frame["minLength"], 1);

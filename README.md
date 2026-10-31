@@ -7,9 +7,10 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its eleven ordered capabilities are independently grantable.
-The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes are
-`ExternalWrite`: create and update are High risk, delete is Critical. Because they are not
+`dekopon.dev/provider/v1alpha1`. Its fifteen ordered capabilities are independently grantable.
+The eight reads are Medium-risk and read-only (`ReadOnly`). The three calendar event writes and
+the four list item writes are `ExternalWrite`: creates, updates and completes are High risk,
+deletes are Critical. Because they are not
 `ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
 **No write is granted or bound in any deployment, and whether Skylight accepts a write made with
 the broker's token is unverified: no live write has been made.** Requests default to
@@ -28,11 +29,15 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.calendar.events.create` | POST `/frames/{frameId}/calendar_events` | `event`: the returned record, as the events projection; `{"ok":true}` on 204 |
 | `skylight-private.calendar.events.update` | PUT `/frames/{frameId}/calendar_events/{eventId}` | `event`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.calendar.events.delete` | DELETE `/frames/{frameId}/calendar_events/{eventId}` | `event` when a record is returned; `{"ok":true}` on 204 |
+| `skylight-private.list.items.create` | POST `/frames/{frameId}/lists/{listId}/list_items` | `item`: the returned record, as the items projection; `{"ok":true}` on 204 |
+| `skylight-private.list.items.update` | PUT `/frames/{frameId}/lists/{listId}/list_items/{itemId}` | `item`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.list.items.complete` | PUT `/frames/{frameId}/lists/{listId}/list_items/{itemId}` (status only) | `item`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.list.items.delete` | DELETE `/frames/{frameId}/lists/{listId}/list_items/{itemId}` | `item` when a record is returned; `{"ok":true}` on 204 |
 
 The reads' routes are GETs.
 
-The manifest description is `Unsupported private Skylight household reads and calendar event writes
-over broker HTTP` (formerly `… account and frame reads over broker HTTP`). The command word is
+The manifest description is `Unsupported private Skylight household reads and calendar event and
+list item writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
 `skylight`. Original account/frames inputs and outputs are unchanged.
 
 ## Owner base URL
@@ -57,8 +62,9 @@ The broker remains the destination-policy boundary: configure `allowedHosts` and
 
 `tests/cassettes/skylight-private/0001-GET-calendar-events.json` is an **authored synthetic
 cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
-cases. `0002-POST-calendar-events.json`, `0003-PUT-calendar-event.json` and
-`0004-DELETE-calendar-event.json` are authored synthetic write exchanges (labelled `provenance:
+cases. `0002-POST-calendar-events.json` through `0004-DELETE-calendar-event.json` (event writes)
+and `0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes) are
+authored synthetic write exchanges (labelled `provenance:
 synthetic`); none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
 or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
 native request seam, and replays the same response through the real component. The component
@@ -80,6 +86,10 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `event-add --frame ID --summary TEXT [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE] [--category ID]... [--rrule RULE]...` | `frameId`, `summary`; optional `startsAt`, `endsAt`, `allDay`, `timezone`, arrays `categoryIds`, `rrule` |
 | `event-update --frame ID --event ID [--summary TEXT] [--starts-at TIME] [--ends-at TIME] [--all-day true\|false] [--tz ZONE]` | `frameId`, `eventId` and at least one optional field |
 | `event-delete --frame ID --event ID` | `frameId`, `eventId` |
+| `list-add --frame ID --list ID --label TEXT [--section TEXT]` | `frameId`, `listId`, `label`; optional `section` |
+| `list-item-update --frame ID --list ID --item ID [--label TEXT] [--status completed\|pending] [--position N]` | `frameId`, `listId`, `itemId` and at least one optional field |
+| `list-item-complete --frame ID --list ID --item ID [--status completed\|pending]` | `frameId`, `listId`, `itemId`; optional `status`, default `completed` |
+| `list-item-delete --frame ID --list ID --item ID` | `frameId`, `listId`, `itemId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
 Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
@@ -90,7 +100,7 @@ members fail closed. Account/frames still reject every selector and flag. The SD
 remains off. Proposals undergo the same constraint/Cedar/broker authorization as direct invocation;
 parsing never grants authority or contacts HTTP.
 
-Frame/list/event selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
+Frame/list/event/item selectors must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
 query delimiters and control characters are rejected. Query values are percent-encoded (including
 `/` in timezones and `+` in `Etc/GMT+5`). No URL, method, arbitrary include, page, cursor, header, body, token,
 assignee or completion selector is accepted. Unknown capability takes precedence over invalid JSON.
@@ -111,6 +121,22 @@ only its two selectors. The body is flat snake_case JSON (`summary`, `starts_at`
 `all_day`, `timezone`, `category_ids`, `rrule`, in that order), and absent fields are omitted,
 never sent as null. This follows `joshuaswarren/pyskylight`'s client and tests. No URL, method,
 header, query, `extra` or `--json` passthrough exists.
+
+### List item writes
+
+The list item writes take the same bounded text rules as the event writes:
+
+- `label` and `section` are 1–256 UTF-8 bytes, not blank, with no control characters.
+- `status` is exactly `completed` or `pending`, the two values the items projection knows. Other
+  source statuses are never written.
+- `position` is an integer from 0 to 1,000,000.
+
+`list-add` sends `label` and an optional `section`. `list-item-update` sends any of `label`,
+`status` and `position`, and must name at least one. `list-item-complete` sends only `status`:
+`completed` by default, or `pending` to reopen an item. `list-item-delete` sends no body. The
+bodies are flat JSON in that field order, with absent fields omitted, following
+`joshuaswarren/pyskylight`'s `add_list_item`, `update_list_item` and `complete_list_item`.
+pyskylight's `extra` passthrough on update is not offered.
 
 ### Calendar boundaries and interpretation
 
@@ -348,8 +374,9 @@ Audit pinned to `joshuaswarren/pyskylight@69e4576b9035d71aacda9ade7a4afea05a663e
 There are **54 ordinary reads, 88 actions, 2 auth commands and 2 sensitive GET helpers**. “Ordinary
 read” is a source classification, not a safety grant. Actions include mutations, code/link generation
 and uploads; even sensitive GET helpers are not ordinary household reads. The only mutations
-implemented are the three calendar event writes (`event-add`, `event-update`, `event-delete`). They
-are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
+implemented are the three calendar event writes (`event-add`, `event-update`, `event-delete`) and
+the four list item writes (`list-add`, `list-item-update`, `list-item-complete`,
+`list-item-delete`). They are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
 unverified. No other mutation, no auth command and no sensitive helper is implemented. Tasks is now supported through the browser-verified chores
 route, not an extra Python registration. All names below are Python registrations, not aliases.
 
@@ -385,7 +412,7 @@ list index and populated detail included items were browser-observed. Every test
 | `plan-update` | Action | Not implemented; out of scope |
 | `plan-remove` | Action | Not implemented; out of scope |
 | `lists` | Read | Partial: metadata and linked included items |
-| `list-add` | Action | Not implemented; out of scope |
+| `list-add` | Action | Partial: `list-add` → `list.items.create`; label and optional section; ungranted, live acceptance unverified |
 | `chores` | Read | Partial: `tasks`, verified dates/flags/filter and typed source chores |
 | `plan-show` | Read | Not implemented; out of scope |
 | `list-show` | Read | Partial: metadata/included items, section count, `--list` selector |
@@ -400,9 +427,9 @@ list index and populated detail included items were browser-observed. Every test
 | `list-create` | Action | Not implemented; out of scope |
 | `list-update` | Action | Not implemented; out of scope |
 | `list-delete` | Action | Not implemented; out of scope |
-| `list-item-update` | Action | Not implemented; out of scope |
-| `list-item-complete` | Action | Not implemented; out of scope |
-| `list-item-delete` | Action | Not implemented; out of scope |
+| `list-item-update` | Action | Partial: `list-item-update` → `list.items.update`; label, `completed`/`pending` status, position; no `extra`; ungranted, live acceptance unverified |
+| `list-item-complete` | Action | Partial: `list-item-complete` → `list.items.complete`; `completed` or `pending`; ungranted, live acceptance unverified |
+| `list-item-delete` | Action | Partial: `list-item-delete` → `list.items.delete`; ungranted, live acceptance unverified |
 | `list-items-delete` | Action | Not implemented; out of scope |
 | `list-item-move` | Action | Not implemented; out of scope |
 | `list-items-section` | Action | Not implemented; out of scope |
