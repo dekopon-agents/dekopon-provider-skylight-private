@@ -604,7 +604,11 @@ recurrence-instance semantics, section schemas and complete household coverage r
 Successful browser reads use the browser's separate authentication context; native broker HTTP
 success still requires separately authorized validation. No credential/session data is in fixtures.
 
-The component artifact ceiling is **1,048,576 bytes (1 MiB)**. The former 589,824-byte
+The component artifact ceiling is **1,048,576 bytes (1 MiB)**. To stay under it as write and read
+capabilities are added, `Cargo.toml`'s `[profile.release]` sets `opt-level = "z"` and
+`strip = true`. That took the 0.8.1-plus-writes component from 1,044,555 to 726,660 bytes.
+Two builds from a clean target directory are byte-identical. The embedded license sections are kept;
+only the symbol name section is dropped, so wasm backtraces carry no function names. The former 589,824-byte
 (576 KiB) bound predated the SDK-owned stdio bindings and typed export, which add code without
 adding ambient authority. This changes only the artifact-size gate: **128,000,000 fuel,
 32 MiB guest memory, ten seconds, one request (a GET for reads, the fixed method for writes),

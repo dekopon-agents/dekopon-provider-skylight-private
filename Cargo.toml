@@ -37,3 +37,10 @@ broken_intra_doc_links = "deny"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+# Size budget for the 1 MiB component ceiling (README "Build and verification"). `strip = true`
+# drops the symbol name section; `opt-level = "z"` optimises for size. The trade: wasm backtraces
+# lose function names, and code favours size over speed.
+[profile.release]
+opt-level = "z"
+strip = true
