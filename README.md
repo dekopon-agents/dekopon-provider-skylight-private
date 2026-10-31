@@ -364,7 +364,7 @@ capabilities:
       skylight-private.tasks.list: {}
 ```
 
-This example lists the eight reads under a GET-only constraint set, which is today's deployment.
+This example lists the eight original reads under a GET-only constraint set, which is today's deployment. The nine photo, message and album reads are `ReadOnly`, so they join `skylight-private:read-only` and its permits. Like any capability, though, each runs only once it has its own `capabilities:` entry and a GET binding, and this example lists none of them.
 Under it every write is refused before HTTP. To run a write, an owner must add three things:
 
 - the write's own `capabilities:` entry, whose `http.allowedMethods` override names exactly its
