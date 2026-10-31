@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provenance": "synthetic: authored for the B3 list writes, never recorded against Skylight",
+  "capability": "skylight-private.lists.update",
+  "input": {"frameId": "frame-test", "listId": "list-synthetic", "label": "Synthetic chores", "kind": "to_do"},
+  "request": {
+    "method": "PUT",
+    "path": "/api/frames/frame-test/lists/list-synthetic",
+    "query": null,
+    "headers": {"accept": "application/json", "skylight-api-version": "2026-05-01", "content-type": "application/json"},
+    "body": {"json": {"label": "Synthetic chores", "kind": "to_do"}}
+  },
+  "response": {
+    "status": 200,
+    "headers": {"content-type": "application/json"},
+    "body": {"json": {"data": {"id": "list-synthetic", "type": "list", "attributes": {"label": "Synthetic chores", "color": "#2E7D32", "kind": "to_do"}}}}
+  }
+}

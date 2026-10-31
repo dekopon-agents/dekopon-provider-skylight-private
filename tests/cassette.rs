@@ -97,6 +97,9 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
         include_str!("cassettes/skylight-private/0006-PUT-list-item.json"),
         include_str!("cassettes/skylight-private/0007-PUT-list-item-complete.json"),
         include_str!("cassettes/skylight-private/0008-DELETE-list-item.json"),
+        include_str!("cassettes/skylight-private/0009-POST-lists.json"),
+        include_str!("cassettes/skylight-private/0010-PUT-list.json"),
+        include_str!("cassettes/skylight-private/0011-DELETE-list.json"),
     ] {
         let exchange: Value = serde_json::from_str(raw)?;
         assert_eq!(exchange["version"], 1);
@@ -173,6 +176,10 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
                 assert_eq!(projected["event"]["id"], record["id"]);
                 assert_eq!(projected["event"]["summary"], attributes["summary"]);
                 assert_eq!(projected["event"]["startsAt"], attributes["starts_at"]);
+            } else if capability.contains(".lists.") {
+                assert_eq!(projected["list"]["id"], record["id"]);
+                assert_eq!(projected["list"]["label"], attributes["label"]);
+                assert_eq!(projected["list"]["kind"], attributes["kind"]);
             } else {
                 assert_eq!(projected["item"]["id"], record["id"]);
                 assert_eq!(projected["item"]["label"], attributes["label"]);
