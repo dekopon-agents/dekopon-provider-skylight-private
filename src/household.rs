@@ -1542,6 +1542,9 @@ impl Mutation {
                     None => (path, None),
                     Some(target) => {
                         safe_segment(target)?;
+                        if target == selector("categoryId")? {
+                            return Err(invalid_household_input());
+                        }
                         (format!("{path}?reassign_to_id={target}"), None)
                     }
                 });

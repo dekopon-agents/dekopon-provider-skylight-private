@@ -508,7 +508,7 @@ read_capability!(
 read_capability!(
     CategoryFindOrCreate,
     "categories.find-or-create",
-    "Returns the category with this label, creating it with this color if absent",
+    "Finds or creates one category by label and color; which fields Skylight matches on is unverified",
     household::CategoryInput,
     method::POST,
     EffectKind::ExternalWrite,
@@ -532,7 +532,7 @@ read_capability!(
 read_capability!(
     CategoryDelete,
     "categories.delete",
-    "Deletes one category, optionally reassigning its items to another",
+    "Deletes one category, which may be a family member's profile; without a reassignment, what happens to its events and chores is unverified",
     household::CategoryDeleteInput,
     method::DELETE,
     EffectKind::ExternalWrite,

@@ -1889,6 +1889,12 @@ fn malformed_category_write_inputs_are_refused_before_any_http() {
         cases.push((Mutation::CategoryDelete, "reassignToId", json!(value)));
     }
     cases.push((Mutation::CategoryDelete, "reassignToId", Value::Null));
+    // Reassigning a category to itself is refused rather than sent.
+    cases.push((
+        Mutation::CategoryDelete,
+        "reassignToId",
+        json!("category-7"),
+    ));
     cases.push((Mutation::CategoryDelete, "label", json!("Swim")));
     for (write, field, value) in cases {
         let mut data = write_input(write);

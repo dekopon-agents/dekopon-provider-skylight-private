@@ -237,10 +237,14 @@ Categories carry family-member linkage on the read side, so these writes change 
 show.
 
 - `category-add` and `category-find-or-create` both require `label` and `color`, with the list
-  rules. Find-or-create returns the existing category of that label, or creates one.
+  rules. Find-or-create finds or creates one category by label and color. Which fields Skylight matches on
+  is unverified, so a new color with an existing label may create a second category.
 - `category-update` sends a PATCH with either field, and must name at least one.
 - `category-delete` sends no body. Its optional `reassignToId` is a bounded selector and becomes
-  `?reassign_to_id=…`. That is the only query string any write sends, and it is never caller text.
+  `?reassign_to_id=…`. That is the only query string any write sends: a bounded selector, never free text. Reassigning a
+  category to itself is refused before HTTP. A category can be a family member's profile
+  (`linkedToProfile`). Without `--reassign-to`, what Skylight does with the category's events and
+  chores is unverified.
 - pyskylight's `extra` passthrough is not offered.
 
 ### Calendar boundaries and interpretation
@@ -336,7 +340,7 @@ The guest never sets `authorization` or `cookie`, and never sets `content-type` 
 the broker injects the destination-bound bearer. A read decodes only status 200. Response headers
 and content type are ignored, and response bodies are capped at 262,144 bytes.
 
-A write decodes a 200 or 201 as the returned record (`event` or `item`), and a 204 yields exactly
+A write decodes a 200 or 201 as the returned record, and a 204 yields exactly
 `{"ok":true}`. A 2xx means the write applied, so a write never fails after one. A 200 or 201 whose
 body is missing, malformed or over the cap yields `{"ok":true,"recordProjected":false}`, not
 `invalid-response`, so that a caller does not retry and repeat the write.
