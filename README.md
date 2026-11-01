@@ -7,10 +7,10 @@
 > **Successful native broker HTTP validation is pending.** No subscription tier is inferred from HTTP errors.
 
 `skylight-private` is a broker-only Rust component implementing API
-`dekopon.dev/provider/v1alpha1`. Its thirty-one ordered capabilities are independently grantable.
-The seventeen reads are Medium-risk and read-only (`ReadOnly`). The fourteen writes are
-`ExternalWrite`: three calendar event writes, four list item writes, three list writes and four
-category writes. Creates, updates and completes are High risk; deletes are Critical. Because they are not
+`dekopon.dev/provider/v1alpha1`. Its thirty-five ordered capabilities are independently grantable.
+The seventeen reads are Medium-risk and read-only (`ReadOnly`). The eighteen writes are
+`ExternalWrite`: three calendar event writes, four list item writes, three list writes, four
+category writes and four task (chore) writes. Creates, updates and completes are High risk; deletes are Critical. Because they are not
 `ReadOnly`, no write ever joins the broker's `skylight-private:read-only` group.
 **No write is granted or bound in any deployment, and whether Skylight accepts a write made with
 the broker's token is unverified: no live write has been made.** Requests default to
@@ -40,7 +40,10 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 | `skylight-private.categories.find-or-create` | POST `/frames/{frameId}/categories/find_or_create` | `category`: the found or created record; `{"ok":true}` on 204 |
 | `skylight-private.categories.update` | PATCH `/frames/{frameId}/categories/{categoryId}` | `category`: the returned record; `{"ok":true}` on 204 |
 | `skylight-private.categories.delete` | DELETE `/frames/{frameId}/categories/{categoryId}[?reassign_to_id={categoryId}]` | `category` when a record is returned; `{"ok":true}` on 204 |
-
+| `skylight-private.tasks.create` | POST `/frames/{frameId}/chores` | `task`: the returned record, as the tasks projection; `{"ok":true}` on 204 |
+| `skylight-private.tasks.update` | PUT `/frames/{frameId}/chores/{taskId}` | `task`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.tasks.complete` | PUT `/frames/{frameId}/chores/{taskId}/completions` | `task`: the returned record; `{"ok":true}` on 204 |
+| `skylight-private.tasks.delete` | DELETE `/frames/{frameId}/chores/{taskId}` | `task` when a record is returned; `{"ok":true}` on 204 |
 | `skylight-private.messages.list` | `/frames/{frameId}/messages` (first page only) | `messages`: IDs, captions, created times, linkage; never media URLs |
 | `skylight-private.messages.read` | `/frames/{frameId}/messages/{messageId}` | `message`: the same fields for one message |
 | `skylight-private.messages.likes.list` | `/frames/{frameId}/messages/{messageId}/all_likes` | `likes`: IDs, created times, linkage |
@@ -54,7 +57,7 @@ the broker's token is unverified: no live write has been made.** Requests defaul
 The reads' routes are GETs.
 
 The manifest description is `Unsupported private Skylight household reads and calendar event, list,
-list item and category writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
+list item, category and chore writes over broker HTTP` (originally `… account and frame reads over broker HTTP`). The command word is
 `skylight`. Original account/frames inputs and outputs are unchanged.
 
 ## Owner base URL
@@ -81,9 +84,10 @@ The broker remains the destination-policy boundary: configure `allowedHosts` and
 cassette v1 fixture**, derived from `src/household_tests.rs` calendar projection and encoded-query
 cases. `0002-POST-calendar-events.json` through `0004-DELETE-calendar-event.json` (event writes)
 `0005-POST-list-items.json` through `0008-DELETE-list-item.json` (list item writes),
-`0009-POST-lists.json` through `0011-DELETE-list.json` (list writes) and
+`0009-POST-lists.json` through `0011-DELETE-list.json` (list writes),
+`0012-POST-chores.json` through `0015-DELETE-chore.json` (task writes) and
 `0016-POST-categories.json` through `0019-DELETE-category.json` (category writes) are authored
-synthetic write exchanges. Numbers 0012-0015 are reserved for the task writes, which are not built.
+synthetic write exchanges.
 All of them are labelled `provenance: synthetic`, and none was recorded against Skylight. It is not a vendor recording and contains no credentials, cookies, account identifiers,
 or real household data. `tests/cassette.rs` verifies exact URI, method and headers through the
 native request seam, and replays the same response through the real component. The component
@@ -119,9 +123,13 @@ access; the component replay requires `DEKOPON_PROVIDER_COMPONENT` and never sil
 | `category-find-or-create --frame ID --label TEXT --color COLOR` | `frameId`, `label`, `color` |
 | `category-update --frame ID --category ID [--label TEXT] [--color COLOR]` | `frameId`, `categoryId` and at least one optional field |
 | `category-delete --frame ID --category ID [--reassign-to ID]` | `frameId`, `categoryId`; optional `reassignToId` |
+| `chore-add --frame ID --summary TEXT [--start DATE] [--reward-points N] [--category ID] [--recurring true\|false] [--rrule RULE]... [--up-for-grabs true\|false] [--emoji ICON] [--status pending\|complete]` | `frameId`, `summary`; optional `start`, `rewardPoints`, `categoryId`, `recurring`, `recurrenceSet`, `upForGrabs`, `emojiIcon`, `status` |
+| `chore-update --frame ID --chore ID [--summary TEXT] [--start DATE] [--reward-points N] [--status pending\|complete] [--category ID] [--emoji ICON]` | `frameId`, `taskId` and at least one optional field |
+| `chore-complete --frame ID --chore ID [--status complete\|pending] [--instance-date DATE] [--category ID]` | `frameId`, `taskId`; optional `status` (default `complete`), `instanceDate`, `categoryId` |
+| `chore-delete --frame ID --chore ID` | `frameId`, `taskId` |
 | `--help`, `-h`, `help` | renders help, exit 0; no proposal or HTTP |
 
-Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `event-add`'s `--category` and `--rrule` may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
+Selectors and date/zone values are required strings; optional inclusion flags are typed as above. Flags can be reordered. Only `event-add`'s `--category` and `--rrule`, and `chore-add`'s `--rrule`, may repeat: each occurrence adds one array element, at most 16. Every other flag may appear once; no positional IDs,
 `--flag=value`, implicit frame, per-command help, stdin JSON, or transport escape hatch is accepted.
 Unknown/missing/duplicate flags and invalid values return a fixed sanitized usage error, exit 2.
 Piped input is ignored. Every input schema has `additionalProperties:false`; duplicate wire JSON
@@ -129,7 +137,7 @@ members fail closed. Account/frames still reject every selector and flag. The SD
 remains off. Proposals undergo the same constraint/Cedar/broker authorization as direct invocation;
 parsing never grants authority or contacts HTTP.
 
-Frame/list/event/item/category selectors (including `reassignToId`) must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
+Frame/list/event/item/category/task selectors (including `reassignToId` and `categoryId`) must be 1–128 ASCII letters, digits, `_` or `-`. Slash, percent, dot segments,
 query delimiters and control characters are rejected. Query values are percent-encoded (including
 `/` in timezones and `+` in `Etc/GMT+5`). No URL, method, arbitrary include, page, cursor, header, body, token,
 assignee or completion selector is accepted. Unknown capability takes precedence over invalid JSON.
@@ -177,8 +185,11 @@ documented, so each is projected through the same JSON:API envelope as the other
   the source gives a string. Those three names are the ones pyskylight's message, album and comment
   write bodies use.
 - Every other attribute is never read. That covers asset, thumbnail and share URLs, file names,
-  dimensions, links and pagination tokens, so no media URL can reach the output.
-- Included resources keep only their type and ID.
+  dimensions, links and pagination tokens, so no media URL can reach the output. It also covers
+  household attribute names such as `location`, `status` or `name`, so an unexpected value there
+  neither fails the read nor marks it truncated.
+- Included resources keep only their type and ID. Their attributes and relationships are skipped
+  unread.
 - `messages` sends no `page` or `page_token`, so only the first page is read, and pagination is
   never followed.
 - A response that is not that envelope is `invalid-response`.
@@ -197,16 +208,45 @@ Inputs are bounded as follows:
 pyskylight's `hide_from_frame` is not offered, because the read side reports a different flag
 (`hide_on_device`). Neither is its `extra` passthrough.
 
+### Task (chore) writes
+
+The task writes go to the same `/chores` route the `tasks` read uses. Every request, writes
+included, sends `skylight-api-version`.
+
+- `chore-add` requires a `summary`. Its other fields are optional:
+  - `start`: a Gregorian `YYYY-MM-DD` date.
+  - `rewardPoints`: 0–1,000.
+  - `categoryId`: an assignment category, as a selector.
+  - `recurring`: a boolean.
+  - `recurrenceSet`: 1–16 printable-ASCII rules of 1–256 bytes, not interpreted.
+  - `upForGrabs`: a boolean.
+  - `emojiIcon`: 1–32 bytes with no whitespace or control characters.
+  - `status`: `pending` or `complete`, the live-observed values.
+- `chore-update` changes `summary`, `start`, `rewardPoints`, `status`, `categoryId` or `emojiIcon`,
+  and must name at least one.
+- `chore-complete` PUTs to `/completions` with `status`: `complete` by default, or `pending` to
+  reopen. It also takes an optional `instanceDate`, for one occurrence of a series, and an optional
+  completion `categoryId`.
+- `chore-delete` sends no body. Which occurrences of a recurring series it removes is unverified.
+
+`start_time`, `recurring_until` and the completion's `instance_time` are not offered: the `tasks`
+read discards them and their formats are unverified. Delete's `apply_to` is not offered either,
+because its values are unknown. Neither are `extra` or pyskylight's `create_multiple`.
+
 ### Category writes
 
 Categories carry family-member linkage on the read side, so these writes change what other reads
 show.
 
 - `category-add` and `category-find-or-create` both require `label` and `color`, with the list
-  rules. Find-or-create returns the existing category of that label, or creates one.
+  rules. Find-or-create finds or creates one category by label and color. Which fields Skylight matches on
+  is unverified, so a new color with an existing label may create a second category.
 - `category-update` sends a PATCH with either field, and must name at least one.
 - `category-delete` sends no body. Its optional `reassignToId` is a bounded selector and becomes
-  `?reassign_to_id=…`. That is the only query string any write sends, and it is never caller text.
+  `?reassign_to_id=…`. That is the only query string any write sends: a bounded selector, never free text. Reassigning a
+  category to itself is refused before HTTP. A category can be a family member's profile
+  (`linkedToProfile`). Without `--reassign-to`, what Skylight does with the category's events and
+  chores is unverified.
 - pyskylight's `extra` passthrough is not offered.
 
 ### Calendar boundaries and interpretation
@@ -302,7 +342,7 @@ The guest never sets `authorization` or `cookie`, and never sets `content-type` 
 the broker injects the destination-bound bearer. A read decodes only status 200. Response headers
 and content type are ignored, and response bodies are capped at 262,144 bytes.
 
-A write decodes a 200 or 201 as the returned record (`event` or `item`), and a 204 yields exactly
+A write decodes a 200 or 201 as the returned record, and a 204 yields exactly
 `{"ok":true}`. A 2xx means the write applied, so a write never fails after one. A 200 or 201 whose
 body is missing, malformed or over the cap yields `{"ok":true,"recordProjected":false}`, not
 `invalid-response`, so that a caller does not retry and repeat the write.
@@ -452,7 +492,8 @@ implemented are the three calendar event writes (`event-add`, `event-update`, `e
 the four list item writes (`list-add`, `list-item-update`, `list-item-complete`,
 `list-item-delete`), the three list writes (`list-create`, `list-update`, `list-delete`) and
 the four category writes (`category-add`, `category-find-or-create`, `category-update`,
-`category-delete`). They are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
+`category-delete`), and the four task writes (`chore-add`, `chore-update`, `chore-complete`,
+`chore-delete`). They are inert: none is granted or bound in any deployment, and Skylight's acceptance of them is
 unverified. No other mutation, no auth command and no sensitive helper is implemented. Tasks is now supported through the browser-verified chores
 route, not an extra Python registration. All names below are Python registrations, not aliases.
 
@@ -495,11 +536,11 @@ list index and populated detail included items were browser-observed. Every test
 | `list-items` | Read | Partial: typed labels/source status/section/linkage; route source-only |
 | `category` | Read | Not implemented; out of scope |
 | `update-meal-category` | Action | Not implemented; out of scope |
-| `chore-add` | Action | Not implemented; out of scope |
+| `chore-add` | Action | Partial: `chore-add` → `tasks.create`; typed fields; no `start_time`, `recurring_until` or extra; ungranted, live acceptance unverified |
 | `chore-add-multiple` | Action | Not implemented; out of scope |
-| `chore-update` | Action | Not implemented; out of scope |
-| `chore-complete` | Action | Not implemented; out of scope |
-| `chore-delete` | Action | Not implemented; out of scope |
+| `chore-update` | Action | Partial: `chore-update` → `tasks.update`; summary, start, points, status, category, icon; ungranted, live acceptance unverified |
+| `chore-complete` | Action | Partial: `chore-complete` → `tasks.complete`; status, instance date, category; no `instance_time`; ungranted, live acceptance unverified |
+| `chore-delete` | Action | Partial: `chore-delete` → `tasks.delete`; no `apply_to`; ungranted, live acceptance unverified |
 | `list-create` | Action | Partial: `list-create` → `lists.create`; label, color, `shopping`/`to_do` kind; no hide flag or extra; ungranted, live acceptance unverified |
 | `list-update` | Action | Partial: `list-update` → `lists.update`; label, color, kind; ungranted, live acceptance unverified |
 | `list-delete` | Action | Partial: `list-delete` → `lists.delete`; ungranted, live acceptance unverified |
@@ -554,29 +595,29 @@ list index and populated detail included items were browser-observed. Every test
 | `reward-points` | Read | Not implemented; out of scope |
 | `reward-points-set` | Action | Not implemented; out of scope |
 | `messages` | Read | Partial: `messages` → `messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `message` | Read | Partial: `message` → `messages.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message` | Read | Partial: `message` → `messages.read`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-delete` | Action | Not implemented; out of scope |
 | `messages-delete` | Action | Not implemented; out of scope |
 | `messages-copy` | Action | Not implemented; out of scope |
 | `message-caption` | Action | Not implemented; out of scope |
-| `message-likes` | Read | Partial: `message-likes` → `messages.likes.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message-likes` | Read | Partial: `message-likes` → `messages.likes.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-like` | Action | Not implemented; out of scope |
 | `message-unlike` | Action | Not implemented; out of scope |
-| `message-comments` | Read | Partial: `message-comments` → `messages.comments.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `message-comments` | Read | Partial: `message-comments` → `messages.comments.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `message-comment-add` | Action | Not implemented; out of scope |
 | `message-comment-delete` | Action | Not implemented; out of scope |
 | `photo-upload` | Action | Not implemented; out of scope |
 | `upload-credentials` | Sensitive GET helper | Not implemented; out of scope |
-| `albums` | Read | Partial: `albums` → `albums.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `albums` | Read | Partial: `albums` → `albums.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `album-add` | Action | Not implemented; out of scope |
 | `album-update` | Action | Not implemented; out of scope |
 | `album-delete` | Action | Not implemented; out of scope |
-| `album-messages` | Read | Partial: `album-messages` → `albums.messages.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `album-message-ids` | Read | Partial: `album-message-ids` → `albums.message-ids.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `album-messages` | Read | Partial: `album-messages` → `albums.messages.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
+| `album-message-ids` | Read | Partial: `album-message-ids` → `albums.message-ids.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `album-add-photos` | Action | Not implemented; out of scope |
 | `album-remove-photos` | Action | Not implemented; out of scope |
-| `month-in-review` | Read | Partial: `month-in-review` → `month-in-review.read`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
-| `month-in-reviews` | Read | Partial: `month-in-reviews` → `month-in-review.list`; typed IDs/text/linkage, never media URLs; first page only; response shape unverified |
+| `month-in-review` | Read | Partial: `month-in-review` → `month-in-review.read`; typed IDs/text/linkage, never media URLs; response shape unverified |
+| `month-in-reviews` | Read | Partial: `month-in-reviews` → `month-in-review.list`; typed IDs/text/linkage, never media URLs; response shape unverified |
 | `avatars` | Read | Not implemented; out of scope |
 | `colors` | Read | Not implemented; out of scope |
 | `activities` | Read | Not implemented; out of scope |

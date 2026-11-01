@@ -7,13 +7,14 @@ use crate::{
     CategoryFindOrCreate, CategoryUpdate, EventCreate, EventDelete, EventUpdate, Events, Frames,
     ItemComplete, ItemCreate, ItemDelete, ItemUpdate, Items, List, ListCreate, ListDelete,
     ListUpdate, Lists, Message, MessageComments, MessageLikes, Messages, MonthInReview,
-    MonthInReviews, SkylightPrivate, Tasks, household,
+    MonthInReviews, SkylightPrivate, TaskComplete, TaskCreate, TaskDelete, TaskUpdate, Tasks,
+    household,
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "skylight",
-    about = "Unsupported private Skylight household reads and calendar event, list, list item and category writes over broker HTTP",
+    about = "Unsupported private Skylight household reads and calendar event, list, list item, category and chore writes over broker HTTP",
     disable_version_flag = true
 )]
 pub struct Args {
@@ -263,6 +264,65 @@ enum Command {
         #[arg(long)]
         reassign_to: Option<String>,
     },
+    ChoreAdd {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        reward_points: Option<u64>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        recurring: Option<bool>,
+        /// Repeat once per recurrence rule string.
+        #[arg(long)]
+        rrule: Vec<String>,
+        #[arg(long)]
+        up_for_grabs: Option<bool>,
+        #[arg(long)]
+        emoji: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+    },
+    ChoreUpdate {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        chore: String,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        reward_points: Option<u64>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        emoji: Option<String>,
+    },
+    ChoreComplete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        chore: String,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        instance_date: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+    },
+    ChoreDelete {
+        #[arg(long)]
+        frame: String,
+        #[arg(long)]
+        chore: String,
+    },
 }
 
 pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
@@ -484,6 +544,69 @@ pub fn propose(args: Args) -> Result<Proposal<SkylightPrivate>, Usage> {
             household::CategoryDeleteInput::new(frame, category, reassign_to),
             |input| household::Mutation::CategoryDelete.uri(input),
         )?,
+        Command::ChoreAdd {
+            frame,
+            summary,
+            start,
+            reward_points,
+            category,
+            recurring,
+            rrule,
+            up_for_grabs,
+            emoji,
+            status,
+        } => checked::<TaskCreate>(
+            household::TaskCreateInput::new(
+                frame,
+                summary,
+                start,
+                reward_points,
+                category,
+                recurring,
+                rrule,
+                up_for_grabs,
+                emoji,
+                status,
+            ),
+            |input| household::Mutation::TaskCreate.uri(input),
+        )?,
+        Command::ChoreUpdate {
+            frame,
+            chore,
+            summary,
+            start,
+            reward_points,
+            status,
+            category,
+            emoji,
+        } => checked::<TaskUpdate>(
+            household::TaskUpdateInput::new(
+                frame,
+                chore,
+                summary,
+                start,
+                reward_points,
+                status,
+                category,
+                emoji,
+            ),
+            |input| household::Mutation::TaskUpdate.uri(input),
+        )?,
+        Command::ChoreComplete {
+            frame,
+            chore,
+            status,
+            instance_date,
+            category,
+        } => checked::<TaskComplete>(
+            household::TaskCompleteInput::new(frame, chore, status, instance_date, category),
+            |input| household::Mutation::TaskComplete.uri(input),
+        )?,
+        Command::ChoreDelete { frame, chore } => {
+            checked::<TaskDelete>(household::TaskDeleteInput::new(frame, chore), |input| {
+                household::Mutation::TaskDelete.uri(input)
+            })?
+        }
     };
     Ok(proposal)
 }

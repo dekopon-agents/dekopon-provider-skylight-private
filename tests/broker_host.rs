@@ -293,6 +293,7 @@ async fn each_read_requires_the_exact_host_method_budget_and_destination_bound_s
 }
 
 const EVENTS_TARGET: &str = "/skylight/api/frames/frame-test/calendar_events";
+const CHORES_TARGET: &str = "/skylight/api/frames/frame-test/chores";
 const CATEGORIES_TARGET: &str = "/skylight/api/frames/frame-test/categories";
 const LISTS_TARGET: &str = "/skylight/api/frames/frame-test/lists";
 const ITEMS_TARGET: &str = "/skylight/api/frames/frame-test/lists/list-test/list_items";
@@ -312,7 +313,7 @@ fn create_input() -> Value {
     })
 }
 
-fn writes() -> [(&'static str, &'static str, Value, String); 14] {
+fn writes() -> [(&'static str, &'static str, Value, String); 18] {
     [
         (
             "skylight-private.calendar.events.create",
@@ -397,6 +398,30 @@ fn writes() -> [(&'static str, &'static str, Value, String); 14] {
             "DELETE",
             json!({"frameId":"frame-test","categoryId":"category-7","reassignToId":"category-8"}),
             format!("{CATEGORIES_TARGET}/category-7?reassign_to_id=category-8"),
+        ),
+        (
+            "skylight-private.tasks.create",
+            "POST",
+            json!({"frameId":"frame-test","summary":"Feed the cat"}),
+            CHORES_TARGET.to_owned(),
+        ),
+        (
+            "skylight-private.tasks.update",
+            "PUT",
+            json!({"frameId":"frame-test","taskId":"chore-7","status":"complete"}),
+            format!("{CHORES_TARGET}/chore-7"),
+        ),
+        (
+            "skylight-private.tasks.complete",
+            "PUT",
+            json!({"frameId":"frame-test","taskId":"chore-7"}),
+            format!("{CHORES_TARGET}/chore-7/completions"),
+        ),
+        (
+            "skylight-private.tasks.delete",
+            "DELETE",
+            json!({"frameId":"frame-test","taskId":"chore-7"}),
+            format!("{CHORES_TARGET}/chore-7"),
         ),
     ]
 }
@@ -677,5 +702,125 @@ async fn each_write_runs_only_under_its_exact_method_and_never_under_a_get_only_
             serde_json::from_slice::<Value>(&stdout).unwrap(),
             json!({"ok": true})
         );
+    }
+}
+
+/// The nine media reads, each with its input, the exact target the consumer must see (with the
+/// owner `baseUrl` prefix) and a synthetic answer of the right envelope shape.
+fn media_reads() -> [(
+    &'static str,
+    Value,
+    &'static str,
+    &'static str,
+    &'static str,
+); 9] {
+    let message = json!({"frameId":"frame-test","messageId":"message-test"});
+    let album = json!({"frameId":"frame-test","albumId":"album-test"});
+    let frame = json!({"frameId":"frame-test"});
+    let list = r#"{"data":[{"id":"record-1","type":"message","attributes":{"caption":"Beach"}}]}"#;
+    [
+        (
+            "skylight-private.messages.list",
+            frame.clone(),
+            "/skylight/api/frames/frame-test/messages",
+            list,
+            "messages",
+        ),
+        (
+            "skylight-private.messages.read",
+            message.clone(),
+            "/skylight/api/frames/frame-test/messages/message-test",
+            r#"{"data":{"id":"message-test","type":"message","attributes":{"caption":"Beach"}}}"#,
+            "message",
+        ),
+        (
+            "skylight-private.messages.likes.list",
+            message.clone(),
+            "/skylight/api/frames/frame-test/messages/message-test/all_likes",
+            list,
+            "likes",
+        ),
+        (
+            "skylight-private.messages.comments.list",
+            message,
+            "/skylight/api/frames/frame-test/messages/message-test/comments",
+            list,
+            "comments",
+        ),
+        (
+            "skylight-private.albums.list",
+            frame.clone(),
+            "/skylight/api/frames/frame-test/albums",
+            list,
+            "albums",
+        ),
+        (
+            "skylight-private.albums.messages.list",
+            album.clone(),
+            "/skylight/api/frames/frame-test/albums/album-test/messages",
+            list,
+            "messages",
+        ),
+        (
+            "skylight-private.albums.message-ids.list",
+            album,
+            "/skylight/api/frames/frame-test/albums/album-test/messages/all_ids",
+            list,
+            "messageIds",
+        ),
+        (
+            "skylight-private.month-in-review.read",
+            frame.clone(),
+            "/skylight/api/frames/frame-test/month_in_review",
+            r#"{"data":{"id":"review-1","type":"month_in_review","attributes":{"title":"March"}}}"#,
+            "monthInReview",
+        ),
+        (
+            "skylight-private.month-in-review.list",
+            frame,
+            "/skylight/api/frames/frame-test/month_in_reviews",
+            list,
+            "monthInReviews",
+        ),
+    ]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_media_read_sends_one_exact_get_to_its_prefixed_route_with_no_guest_credential() {
+    let registry = BrokerProviderRegistry::load([component()], limits())
+        .await
+        .unwrap();
+    for (capability, input, target, answer, key) in media_reads() {
+        let (listener, consumer) = loopback_consumer("200 OK", answer);
+        let port = listener.local_addr().unwrap().port();
+        let (result, stdout) = invoke_loopback(
+            &registry,
+            capability,
+            input,
+            loopback_grant(port, "GET"),
+            port,
+        )
+        .await;
+        let output = result.unwrap_or_else(|failure| panic!("{capability}: {:?}", failure.error));
+        let captured = consumer.join().unwrap();
+        assert_no_connection(&listener);
+        assert_eq!(output.http_calls.len(), 1, "{capability}");
+        assert_eq!(output.http_calls[0].method, "GET", "{capability}");
+        assert_eq!(output.http_calls[0].status, Some(200), "{capability}");
+        assert!(!output.http_calls[0].credential_injected, "{capability}");
+        assert_eq!(
+            captured.request_line,
+            format!("GET {target} HTTP/1.1"),
+            "{capability}"
+        );
+        for denied in ["authorization", "cookie", "content-type"] {
+            assert!(
+                captured.headers.iter().all(|(name, _)| name != denied),
+                "{capability} sent {denied}"
+            );
+        }
+        assert!(captured.body.is_empty(), "{capability}");
+        let projected: Value = serde_json::from_slice(&stdout).unwrap();
+        assert!(!projected[key].is_null(), "{capability}: {projected}");
     }
 }

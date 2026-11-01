@@ -781,6 +781,25 @@ fn write_input(write: Mutation) -> Value {
         Mutation::CategoryDelete => {
             json!({"frameId":"frame-test", "categoryId":"category-7", "reassignToId":"category-8"})
         }
+        Mutation::TaskCreate => json!({
+            "frameId": "frame-test",
+            "summary": "Feed the cat",
+            "start": "2028-03-11",
+            "rewardPoints": 5,
+            "categoryId": "category-7",
+            "recurring": true,
+            "recurrenceSet": ["RRULE:FREQ=DAILY"],
+            "upForGrabs": false,
+            "emojiIcon": "🐈",
+            "status": "pending"
+        }),
+        Mutation::TaskUpdate => {
+            json!({"frameId":"frame-test", "taskId":"chore-7", "summary":"Feed both cats", "rewardPoints":10})
+        }
+        Mutation::TaskComplete => {
+            json!({"frameId":"frame-test", "taskId":"chore-7", "instanceDate":"2028-03-11"})
+        }
+        Mutation::TaskDelete => json!({"frameId":"frame-test", "taskId":"chore-7"}),
     }
 }
 /// Every selector a write's route takes, and its required non-selector field.
@@ -793,6 +812,10 @@ fn write_required(write: Mutation) -> &'static [&'static str] {
         Mutation::ListUpdate | Mutation::ListDelete => &["frameId", "listId"],
         Mutation::CategoryCreate | Mutation::CategoryFindOrCreate => &["frameId", "label", "color"],
         Mutation::CategoryUpdate | Mutation::CategoryDelete => &["frameId", "categoryId"],
+        Mutation::TaskCreate => &["frameId", "summary"],
+        Mutation::TaskUpdate | Mutation::TaskComplete | Mutation::TaskDelete => {
+            &["frameId", "taskId"]
+        }
         _ => &["frameId", "listId", "itemId"],
     }
 }
@@ -811,6 +834,14 @@ fn write_record(write: Mutation) -> (&'static str, &'static str, Value) {
             "category",
             "label",
             json!({"data":{"id":"record-7","type":"category","attributes":{"label":"Dentist","color":"#1E88E5"}}}),
+        ),
+        Mutation::TaskCreate
+        | Mutation::TaskUpdate
+        | Mutation::TaskComplete
+        | Mutation::TaskDelete => (
+            "task",
+            "summary",
+            json!({"data":{"id":"record-7","type":"chore","attributes":{"summary":"Dentist","status":"pending"}}}),
         ),
         Mutation::ListCreate | Mutation::ListUpdate | Mutation::ListDelete => (
             "list",
@@ -1858,6 +1889,12 @@ fn malformed_category_write_inputs_are_refused_before_any_http() {
         cases.push((Mutation::CategoryDelete, "reassignToId", json!(value)));
     }
     cases.push((Mutation::CategoryDelete, "reassignToId", Value::Null));
+    // Reassigning a category to itself is refused rather than sent.
+    cases.push((
+        Mutation::CategoryDelete,
+        "reassignToId",
+        json!("category-7"),
+    ));
     cases.push((Mutation::CategoryDelete, "label", json!("Swim")));
     for (write, field, value) in cases {
         let mut data = write_input(write);
@@ -2244,4 +2281,347 @@ fn truncated_media_text_marks_the_record_and_the_output_truncated() {
     .unwrap();
     assert_eq!(exact["messages"][0]["truncated"], false);
     assert_eq!(exact["truncated"], false);
+}
+
+#[test]
+fn media_records_never_decode_household_attribute_names() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    // Shapes a household record would refuse: they are never read on a media record.
+    let record = json!({"id": "message-1", "type": "message", "attributes": {
+        "caption": "Beach",
+        "location": {"lat": "location-sentinel"},
+        "position": "3",
+        "status": 1,
+        "name": {"first": "name-sentinel"},
+        "rrule": "not-an-array",
+        "starts_at": long,
+        "description": long,
+        "label": long
+    }});
+    // An included category whose long label the identity projection drops.
+    let included = json!([{"type": "category", "id": "category-7", "attributes": {"label": long, "position": "x"}, "relationships": {"list": {"data": "not-a-link"}}}]);
+    for read in MEDIA_READS {
+        let single = matches!(read, Read::Message | Read::MonthInReview);
+        let data = if single {
+            record.clone()
+        } else {
+            json!([record])
+        };
+        let output = invoke(read, json!({"data": data, "included": included}))
+            .unwrap_or_else(|error| panic!("{read:?}: {error:?}"));
+        let rendered = output.to_string();
+        assert_eq!(output["truncated"], false, "{read:?}: {rendered}");
+        assert!(rendered.contains("Beach"), "{read:?}");
+        assert!(rendered.contains("\"textTruncated\":false"), "{read:?}");
+        assert!(!rendered.contains("name-sentinel"), "{read:?}");
+        assert!(!rendered.contains("location-sentinel"), "{read:?}");
+    }
+    // Household records no longer count media text toward truncation.
+    let lists = invoke(
+        Read::Lists,
+        json!({"data": [{"id": "list-1", "attributes": {"label": "Groceries", "caption": long, "title": long, "body": long}}]}),
+    )
+    .unwrap();
+    assert_eq!(lists["lists"][0]["textTruncated"], false);
+    assert_eq!(lists["truncated"], false);
+}
+
+#[test]
+fn each_task_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
+    let base = "https://app.ourskylight.com/api/frames/frame-test/chores";
+    let cases: [(Mutation, Value, &str, String, &[u8]); 6] = [
+        (
+            Mutation::TaskCreate,
+            write_input(Mutation::TaskCreate),
+            "POST",
+            base.to_owned(),
+            r#"{"summary":"Feed the cat","start":"2028-03-11","reward_points":5,"category_id":"category-7","recurring":true,"recurrence_set":["RRULE:FREQ=DAILY"],"up_for_grabs":false,"emoji_icon":"🐈","status":"pending"}"#.as_bytes(),
+        ),
+        (
+            Mutation::TaskCreate,
+            json!({"frameId":"frame-test", "summary":"Feed the cat"}),
+            "POST",
+            base.to_owned(),
+            br#"{"summary":"Feed the cat"}"#,
+        ),
+        (
+            Mutation::TaskUpdate,
+            write_input(Mutation::TaskUpdate),
+            "PUT",
+            format!("{base}/chore-7"),
+            br#"{"summary":"Feed both cats","reward_points":10}"#,
+        ),
+        // Completing without a status completes; `pending` reopens.
+        (
+            Mutation::TaskComplete,
+            write_input(Mutation::TaskComplete),
+            "PUT",
+            format!("{base}/chore-7/completions"),
+            br#"{"status":"complete","instance_date":"2028-03-11"}"#,
+        ),
+        (
+            Mutation::TaskComplete,
+            json!({"frameId":"frame-test", "taskId":"chore-7", "status":"pending", "categoryId":"category-7"}),
+            "PUT",
+            format!("{base}/chore-7/completions"),
+            br#"{"category_id":"category-7","status":"pending"}"#,
+        ),
+        (
+            Mutation::TaskDelete,
+            write_input(Mutation::TaskDelete),
+            "DELETE",
+            format!("{base}/chore-7"),
+            b"",
+        ),
+    ];
+    for (write, input, method, uri, body) in cases {
+        let calls = std::cell::Cell::new(0);
+        write
+            .invoke(input, |request| {
+                calls.set(calls.get() + 1);
+                assert_write_request(&request, method, &uri, body);
+                Ok(write_response(204, b""))
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 1, "{write:?} must send exactly once");
+    }
+}
+
+#[test]
+fn malformed_task_write_inputs_are_refused_before_any_http() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    let mut cases: Vec<(Mutation, &str, Value)> = Vec::new();
+    for write in [Mutation::TaskCreate, Mutation::TaskUpdate] {
+        for (field, value) in [
+            ("summary", json!("")),
+            ("summary", json!("   ")),
+            ("summary", json!(long)),
+            ("summary", json!("line\nbreak")),
+            ("summary", Value::Null),
+            ("start", json!("2028-02-30")),
+            ("start", json!("2028-03-11T09:00")),
+            ("start", Value::Null),
+            ("rewardPoints", json!(-1)),
+            ("rewardPoints", json!(1.5)),
+            ("rewardPoints", json!(1_001)),
+            ("rewardPoints", json!("5")),
+            ("categoryId", json!("../secret-sentinel")),
+            ("categoryId", json!("")),
+            ("emojiIcon", json!("")),
+            ("emojiIcon", json!("a b")),
+            ("emojiIcon", json!("x".repeat(33))),
+            ("emojiIcon", json!("tab\t")),
+            ("status", json!("completed")),
+            ("status", json!("skipped")),
+            ("status", Value::Null),
+            ("startTime", json!("09:00")),
+            ("recurringUntil", json!("2028-04-01")),
+            ("extra", json!({})),
+        ] {
+            cases.push((write, field, value));
+        }
+    }
+    for (field, value) in [
+        ("recurring", json!("true")),
+        ("upForGrabs", Value::Null),
+        ("recurrenceSet", json!([])),
+        ("recurrenceSet", json!(["RRULE:FREQ=DAILY\r\nX"])),
+        ("recurrenceSet", json!(vec!["RRULE:FREQ=DAILY"; 17])),
+    ] {
+        cases.push((Mutation::TaskCreate, field, value));
+    }
+    for (field, value) in [
+        ("recurring", json!(true)),
+        ("upForGrabs", json!(true)),
+        ("recurrenceSet", json!(["RRULE:FREQ=DAILY"])),
+    ] {
+        cases.push((Mutation::TaskUpdate, field, value));
+    }
+    for (field, value) in [
+        ("status", json!("completed")),
+        ("status", json!("skipped")),
+        ("instanceDate", json!("2028-13-01")),
+        ("instanceTime", json!("09:00")),
+        ("categoryId", json!("a/b")),
+        ("summary", json!("Feed")),
+    ] {
+        cases.push((Mutation::TaskComplete, field, value));
+    }
+    cases.push((Mutation::TaskDelete, "applyTo", json!("all")));
+    cases.push((Mutation::TaskDelete, "summary", json!("Feed")));
+    for (write, field, value) in cases {
+        let mut data = write_input(write);
+        data[field] = value.clone();
+        let error = write
+            .invoke(data, |_| panic!("{write:?} sent invalid {field}={value}"))
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid-input", "{write:?} {field}={value}");
+    }
+    // A task update must change something; the reward bounds 0 and 1,000 are accepted.
+    let selectors = json!({"frameId":"frame-test","taskId":"chore-7"});
+    assert!(Mutation::TaskUpdate.uri(&selectors).is_err());
+    for points in [0, 1_000] {
+        let mut data = selectors.clone();
+        data["rewardPoints"] = json!(points);
+        assert!(Mutation::TaskUpdate.body(&data).is_ok(), "{points}");
+    }
+}
+
+#[test]
+fn task_write_commands_propose_exact_inputs_and_refuse_invalid_or_repeated_flags() {
+    let cases = [
+        (
+            vec![
+                "chore-add",
+                "--frame",
+                "frame-test",
+                "--summary",
+                "Feed the cat",
+                "--start",
+                "2028-03-11",
+                "--reward-points",
+                "5",
+                "--category",
+                "category-7",
+                "--recurring",
+                "true",
+                "--rrule",
+                "RRULE:FREQ=DAILY",
+                "--up-for-grabs",
+                "false",
+                "--emoji",
+                "🐈",
+                "--status",
+                "pending",
+            ],
+            Mutation::TaskCreate,
+            write_input(Mutation::TaskCreate),
+        ),
+        (
+            vec![
+                "chore-update",
+                "--frame",
+                "frame-test",
+                "--chore",
+                "chore-7",
+                "--summary",
+                "Feed both cats",
+                "--reward-points",
+                "10",
+            ],
+            Mutation::TaskUpdate,
+            write_input(Mutation::TaskUpdate),
+        ),
+        (
+            vec![
+                "chore-complete",
+                "--frame",
+                "frame-test",
+                "--chore",
+                "chore-7",
+                "--instance-date",
+                "2028-03-11",
+            ],
+            Mutation::TaskComplete,
+            write_input(Mutation::TaskComplete),
+        ),
+        (
+            vec![
+                "chore-delete",
+                "--chore",
+                "chore-7",
+                "--frame",
+                "frame-test",
+            ],
+            Mutation::TaskDelete,
+            write_input(Mutation::TaskDelete),
+        ),
+    ];
+    for (words, write, expected) in cases {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let dekopon_provider_sdk::CommandRunOutcome::Proposed {
+            capability, input, ..
+        } = provider::command::<SkylightPrivate>(&argv, true)
+        else {
+            panic!("expected proposal for {argv:?}");
+        };
+        assert_eq!(capability.as_str(), write.capability());
+        assert_eq!(input, expected);
+    }
+    for words in [
+        vec!["chore-add", "--frame", "x"],
+        vec![
+            "chore-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--summary",
+            "b",
+        ],
+        vec![
+            "chore-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--start-time",
+            "09:00",
+        ],
+        vec![
+            "chore-add",
+            "--frame",
+            "x",
+            "--summary",
+            "a",
+            "--status",
+            "secret-sentinel",
+        ],
+        vec!["chore-update", "--frame", "x", "--chore", "y"],
+        vec![
+            "chore-update",
+            "--frame",
+            "x",
+            "--chore",
+            "y",
+            "--recurring",
+            "true",
+        ],
+        vec![
+            "chore-complete",
+            "--frame",
+            "x",
+            "--chore",
+            "y",
+            "--instance-time",
+            "09:00",
+        ],
+        vec![
+            "chore-delete",
+            "--frame",
+            "x",
+            "--chore",
+            "y",
+            "--apply-to",
+            "all",
+        ],
+        vec![
+            "chore-delete",
+            "--frame",
+            "x",
+            "--chore",
+            "../secret-sentinel",
+        ],
+    ] {
+        let argv: Vec<_> = words.into_iter().map(str::to_owned).collect();
+        let outcome = provider::command::<SkylightPrivate>(&argv, false);
+        assert!(
+            !matches!(
+                outcome,
+                dekopon_provider_sdk::CommandRunOutcome::Proposed { .. }
+            ),
+            "invalid argv accepted: {argv:?}"
+        );
+        assert!(!format!("{outcome:?}").contains("secret-sentinel"));
+    }
 }

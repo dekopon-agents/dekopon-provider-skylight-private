@@ -26,7 +26,7 @@ The broker contract is in core and is not repeated here:
 
 | | Provider (guest) | Broker |
 |---|---|---|
-| Request | Builds one fixed request to `app.ourskylight.com` (GET for reads; POST, PUT, PATCH or DELETE for the calendar event, list, list item and category writes); never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
+| Request | Builds one fixed request to `app.ourskylight.com` (GET for reads; POST, PUT, PATCH or DELETE for the calendar event, list, list item, category and task writes); never sets `authorization` (the host rejects a guest-supplied one) | Checks method, host, path and query against the binding before injecting |
 | Which secret | Proposes none: no `secretUse`, no DRN, no `--secret` operand | Attaches the capability's owner-authored `defaultSecretUse` when the proposal names no secret |
 | Authority | None | Capability decision, a separate Cedar `secret.use` decision on the exact DRN, and the private binding must all allow |
 | OAuth | None: no login, refresh, token cache, rotation, expiry, seed or record | `oauth2Refresh`: record lock, bare refresh-token grant, atomic rotation, scheduled idle refresh, seed adoption, sealing |
@@ -104,7 +104,7 @@ Every binding uses `sink: httpBearer`, `allowedHosts: [app.ourskylight.com]`,
 | `skylight-tasks-list` | `skylight-private.tasks.list` | `segmentPrefix /api/frames` | yes |
 
 No write is bound. A future `skylight-private.categories.delete` binding that permits
-`--reassign-to` needs `allowQuery: yes`: that write then sends `?reassign_to_id=…`, and the broker
+`--reassign-to` needs `allowQuery: true`: that write then sends `?reassign_to_id=…`, and the broker
 refuses to inject the bearer on a URL with a query unless the binding allows one.
 
 Bind only the capabilities you grant. A non-default

@@ -41,7 +41,7 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
     conformance::<SkylightPrivate>(component())?;
     let manifest = provider::manifest::<SkylightPrivate>()?;
     assert_eq!(manifest.id.as_str(), "skylight-private");
-    assert_eq!(manifest.capabilities.len(), 31);
+    assert_eq!(manifest.capabilities.len(), 35);
     let expected_ids = [
         ACCOUNT,
         FRAMES,
@@ -65,6 +65,10 @@ fn component_conforms_and_declares_only_broker_imports() -> TestResult {
         "skylight-private.categories.find-or-create",
         "skylight-private.categories.update",
         "skylight-private.categories.delete",
+        "skylight-private.tasks.create",
+        "skylight-private.tasks.update",
+        "skylight-private.tasks.complete",
+        "skylight-private.tasks.delete",
         "skylight-private.messages.list",
         "skylight-private.messages.read",
         "skylight-private.messages.likes.list",

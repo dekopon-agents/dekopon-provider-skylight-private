@@ -100,6 +100,10 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
         include_str!("cassettes/skylight-private/0009-POST-lists.json"),
         include_str!("cassettes/skylight-private/0010-PUT-list.json"),
         include_str!("cassettes/skylight-private/0011-DELETE-list.json"),
+        include_str!("cassettes/skylight-private/0012-POST-chores.json"),
+        include_str!("cassettes/skylight-private/0013-PUT-chore.json"),
+        include_str!("cassettes/skylight-private/0014-PUT-chore-completions.json"),
+        include_str!("cassettes/skylight-private/0015-DELETE-chore.json"),
         include_str!("cassettes/skylight-private/0016-POST-categories.json"),
         include_str!("cassettes/skylight-private/0017-POST-categories-find-or-create.json"),
         include_str!("cassettes/skylight-private/0018-PATCH-category.json"),
@@ -183,6 +187,10 @@ fn authored_write_cassettes_replay_with_exact_method_prefix_headers_and_body()
                 assert_eq!(projected["event"]["id"], record["id"]);
                 assert_eq!(projected["event"]["summary"], attributes["summary"]);
                 assert_eq!(projected["event"]["startsAt"], attributes["starts_at"]);
+            } else if capability.contains(".tasks.") {
+                assert_eq!(projected["task"]["id"], record["id"]);
+                assert_eq!(projected["task"]["summary"], attributes["summary"]);
+                assert_eq!(projected["task"]["status"], attributes["status"]);
             } else if capability.contains(".categories.") {
                 assert_eq!(projected["category"]["id"], record["id"]);
                 assert_eq!(projected["category"]["label"], attributes["label"]);

@@ -1027,6 +1027,279 @@ struct CategoryBody<'a> {
     color: Option<&'a str>,
 }
 
+// Task (chore) writes: INVENTORY rows 30 and 32-34. `start_time`, `recurring_until` and the
+// completion's `instance_time` stay out (the read side discards them, formats unverified), as does
+// delete's `apply_to` (values unknown). Status takes the two live-observed values.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskCreateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    summary: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    start: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_position"
+    )]
+    #[schemars(with = "u32", range(max = 1_000))]
+    reward_points: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    recurring: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_texts"
+    )]
+    #[schemars(
+        with = "Vec<String>",
+        length(min = 1, max = 16),
+        inner(length(min = 1, max = 256), regex(pattern = "^[ -~]+$"))
+    )]
+    recurrence_set: Option<Vec<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_bool"
+    )]
+    #[schemars(with = "bool")]
+    up_for_grabs: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    emoji_icon: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["pending", "complete"]))]
+    status: Option<String>,
+}
+impl TaskCreateInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        frame_id: String,
+        summary: String,
+        start: Option<String>,
+        reward_points: Option<u64>,
+        category_id: Option<String>,
+        recurring: Option<bool>,
+        recurrence_set: Vec<String>,
+        up_for_grabs: Option<bool>,
+        emoji_icon: Option<String>,
+        status: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            summary,
+            start,
+            reward_points,
+            category_id,
+            recurring,
+            recurrence_set: (!recurrence_set.is_empty()).then_some(recurrence_set),
+            up_for_grabs,
+            emoji_icon,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[schemars(extend("minProperties" = 3))]
+pub struct TaskUpdateInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 256))]
+    summary: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    start: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_position"
+    )]
+    #[schemars(with = "u32", range(max = 1_000))]
+    reward_points: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["pending", "complete"]))]
+    status: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    emoji_icon: Option<String>,
+}
+impl TaskUpdateInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        frame_id: String,
+        task_id: String,
+        summary: Option<String>,
+        start: Option<String>,
+        reward_points: Option<u64>,
+        status: Option<String>,
+        category_id: Option<String>,
+        emoji_icon: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            task_id,
+            summary,
+            start,
+            reward_points,
+            status,
+            category_id,
+            emoji_icon,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskCompleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", extend("enum" = ["complete", "pending"], "default" = "complete"))]
+    status: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(with = "String", regex(pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"), extend("format" = "date"))]
+    instance_date: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_text"
+    )]
+    #[schemars(
+        with = "String",
+        length(min = 1, max = 128),
+        regex(pattern = "^[A-Za-z0-9_-]+$")
+    )]
+    category_id: Option<String>,
+}
+impl TaskCompleteInput {
+    pub(crate) fn new(
+        frame_id: String,
+        task_id: String,
+        status: Option<String>,
+        instance_date: Option<String>,
+        category_id: Option<String>,
+    ) -> Self {
+        Self {
+            frame_id,
+            task_id,
+            status,
+            instance_date,
+            category_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskDeleteInput {
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    frame_id: String,
+    #[schemars(length(min = 1, max = 128), regex(pattern = "^[A-Za-z0-9_-]+$"))]
+    task_id: String,
+}
+impl TaskDeleteInput {
+    pub(crate) fn new(frame_id: String, task_id: String) -> Self {
+        Self { frame_id, task_id }
+    }
+}
+
+#[derive(Default, Serialize)]
+struct TaskBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reward_points: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recurring: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recurrence_set: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    up_for_grabs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emoji_icon: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_date: Option<&'a str>,
+}
+
 /// The fixed list body, in pyskylight's field order.
 #[derive(Default, Serialize)]
 struct ListBody<'a> {
@@ -1069,10 +1342,14 @@ pub(crate) enum Mutation {
     CategoryFindOrCreate,
     CategoryUpdate,
     CategoryDelete,
+    TaskCreate,
+    TaskUpdate,
+    TaskComplete,
+    TaskDelete,
 }
 
 #[cfg(test)]
-pub(crate) const WRITES: [Mutation; 14] = [
+pub(crate) const WRITES: [Mutation; 18] = [
     Mutation::EventCreate,
     Mutation::EventUpdate,
     Mutation::EventDelete,
@@ -1087,6 +1364,10 @@ pub(crate) const WRITES: [Mutation; 14] = [
     Mutation::CategoryFindOrCreate,
     Mutation::CategoryUpdate,
     Mutation::CategoryDelete,
+    Mutation::TaskCreate,
+    Mutation::TaskUpdate,
+    Mutation::TaskComplete,
+    Mutation::TaskDelete,
 ];
 
 impl Mutation {
@@ -1107,6 +1388,10 @@ impl Mutation {
             Self::CategoryFindOrCreate => "skylight-private.categories.find-or-create",
             Self::CategoryUpdate => "skylight-private.categories.update",
             Self::CategoryDelete => "skylight-private.categories.delete",
+            Self::TaskCreate => "skylight-private.tasks.create",
+            Self::TaskUpdate => "skylight-private.tasks.update",
+            Self::TaskComplete => "skylight-private.tasks.complete",
+            Self::TaskDelete => "skylight-private.tasks.delete",
         }
     }
 
@@ -1122,14 +1407,20 @@ impl Mutation {
             | Self::ItemCreate
             | Self::ListCreate
             | Self::CategoryCreate
-            | Self::CategoryFindOrCreate => method::POST,
+            | Self::CategoryFindOrCreate
+            | Self::TaskCreate => method::POST,
             Self::CategoryUpdate => method::PATCH,
-            Self::EventUpdate | Self::ItemUpdate | Self::ItemComplete | Self::ListUpdate => {
-                method::PUT
-            }
-            Self::EventDelete | Self::ItemDelete | Self::ListDelete | Self::CategoryDelete => {
-                method::DELETE
-            }
+            Self::EventUpdate
+            | Self::ItemUpdate
+            | Self::ItemComplete
+            | Self::ListUpdate
+            | Self::TaskUpdate
+            | Self::TaskComplete => method::PUT,
+            Self::EventDelete
+            | Self::ItemDelete
+            | Self::ListDelete
+            | Self::CategoryDelete
+            | Self::TaskDelete => method::DELETE,
         }
     }
 
@@ -1167,6 +1458,35 @@ impl Mutation {
             }
             Self::CategoryUpdate => (&["frameId", "categoryId"], &["label", "color"]),
             Self::CategoryDelete => (&["frameId", "categoryId"], &["reassignToId"]),
+            Self::TaskCreate => (
+                &["frameId", "summary"],
+                &[
+                    "start",
+                    "rewardPoints",
+                    "categoryId",
+                    "recurring",
+                    "recurrenceSet",
+                    "upForGrabs",
+                    "emojiIcon",
+                    "status",
+                ],
+            ),
+            Self::TaskUpdate => (
+                &["frameId", "taskId"],
+                &[
+                    "summary",
+                    "start",
+                    "rewardPoints",
+                    "status",
+                    "categoryId",
+                    "emojiIcon",
+                ],
+            ),
+            Self::TaskComplete => (
+                &["frameId", "taskId"],
+                &["status", "instanceDate", "categoryId"],
+            ),
+            Self::TaskDelete => (&["frameId", "taskId"], &[]),
         }
     }
 
@@ -1181,7 +1501,11 @@ impl Mutation {
             || required.iter().any(|key| !object.contains_key(*key))
             || (matches!(
                 self,
-                Self::EventUpdate | Self::ItemUpdate | Self::ListUpdate | Self::CategoryUpdate
+                Self::EventUpdate
+                    | Self::ItemUpdate
+                    | Self::ListUpdate
+                    | Self::CategoryUpdate
+                    | Self::TaskUpdate
             ) && !optional.iter().any(|key| object.contains_key(*key)))
         {
             return Err(invalid_household_input());
@@ -1218,6 +1542,9 @@ impl Mutation {
                     None => (path, None),
                     Some(target) => {
                         safe_segment(target)?;
+                        if target == selector("categoryId")? {
+                            return Err(invalid_household_input());
+                        }
                         (format!("{path}?reassign_to_id={target}"), None)
                     }
                 });
@@ -1321,6 +1648,21 @@ impl Mutation {
             }
             Some(_) => Err(invalid_household_input()),
         };
+        if let Self::TaskCreate | Self::TaskUpdate | Self::TaskComplete | Self::TaskDelete = self {
+            let base = format!("{FRAMES_URI}/{frame}/chores");
+            if self == Self::TaskCreate {
+                return Ok((base, Some(encode(&task_body(self, object)?)?)));
+            }
+            let path = format!("{base}/{}", selector("taskId")?);
+            return Ok(match self {
+                Self::TaskDelete => (path, None),
+                Self::TaskComplete => (
+                    format!("{path}/completions"),
+                    Some(encode(&task_body(self, object)?)?),
+                ),
+                _ => (path, Some(encode(&task_body(self, object)?)?)),
+            });
+        }
         let body = EventBody {
             summary: checked("summary", valid_summary)?,
             starts_at: checked("startsAt", valid_event_time)?,
@@ -1381,12 +1723,77 @@ impl Mutation {
             | Self::CategoryFindOrCreate
             | Self::CategoryUpdate
             | Self::CategoryDelete => project(body, "category", true, ProjectionKind::Category),
+            Self::TaskCreate | Self::TaskUpdate | Self::TaskComplete | Self::TaskDelete => {
+                project(body, "task", true, ProjectionKind::Task)
+            }
         };
         Ok(projected.unwrap_or_else(|_| json!({"ok": true, "recordProjected": false})))
     }
 }
 
 const LIST_KINDS: [&str; 2] = ["shopping", "to_do"];
+const TASK_STATUSES: [&str; 2] = ["pending", "complete"];
+const MAX_REWARD_POINTS: u64 = 1_000;
+
+/// Builds a task body from an input whose keys `request` already checked against `fields`.
+fn task_body<'a>(
+    write: Mutation,
+    object: &'a serde_json::Map<String, Value>,
+) -> Result<TaskBody<'a>, ProviderError> {
+    let text = |key: &str, valid: fn(&str) -> bool| match object.get(key) {
+        None => Ok(None),
+        Some(Value::String(value)) if valid(value) => Ok(Some(value.as_str())),
+        Some(_) => Err(invalid_household_input()),
+    };
+    let flag = |key: &str| match object.get(key) {
+        None => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(invalid_household_input()),
+    };
+    let date = |value: &str| ordinal(value).is_ok();
+    let selector = |value: &str| safe_segment(value).is_ok();
+    let status = match text("status", |status| TASK_STATUSES.contains(&status))? {
+        None if write == Mutation::TaskComplete => Some("complete"),
+        status => status,
+    };
+    Ok(TaskBody {
+        summary: text("summary", valid_summary)?,
+        start: text("start", date)?,
+        reward_points: match object.get("rewardPoints") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .filter(|points| *points <= MAX_REWARD_POINTS)
+                    .ok_or_else(invalid_household_input)?,
+            ),
+        },
+        category_id: text("categoryId", selector)?,
+        recurring: flag("recurring")?,
+        recurrence_set: match object.get("recurrenceSet") {
+            None => None,
+            Some(Value::Array(rules)) if (1..=MAX_EVENT_LIST).contains(&rules.len()) => Some(
+                rules
+                    .iter()
+                    .map(|rule| match rule.as_str() {
+                        Some(rule) if valid_rule(rule) => Ok(rule),
+                        _ => Err(invalid_household_input()),
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            Some(_) => return Err(invalid_household_input()),
+        },
+        up_for_grabs: flag("upForGrabs")?,
+        emoji_icon: text("emojiIcon", valid_emoji)?,
+        status,
+        instance_date: text("instanceDate", date)?,
+    })
+}
+
+/// 1-32 bytes with no whitespace or control characters: an emoji or a short icon token.
+fn valid_emoji(value: &str) -> bool {
+    (1..=32).contains(&value.len()) && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+}
 
 /// A color token: 1-32 ASCII letters, digits, `#`, `_` or `-` (a hex code or a palette name).
 fn valid_color(value: &str) -> bool {
@@ -1665,12 +2072,105 @@ struct Attributes {
     start_time: Nullable<serde::de::IgnoredAny>,
     #[serde(default)]
     name: Nullable<String>,
+}
+
+/// Photo, message, album and month-in-review records read only these names. Household attribute
+/// names (`location`, `status`, `name`, ...) are never decoded on them, so an unexpected shape
+/// there cannot fail the read or mark it truncated.
+#[derive(Default, Deserialize)]
+struct MediaAttributes {
+    #[serde(default)]
+    created_at: Nullable<String>,
     #[serde(default)]
     caption: LenientText,
     #[serde(default)]
     title: LenientText,
     #[serde(default)]
     body: LenientText,
+}
+
+/// Included resources of a media read keep only their type and ID, so their attributes and
+/// relationships are skipped unread.
+#[derive(Default)]
+struct Dropped;
+impl<'de> Deserialize<'de> for Dropped {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(d).map(|_| Self)
+    }
+}
+
+/// A record's attribute set: what it validates and how it projects.
+trait Attrs: Default + for<'de> Deserialize<'de> {
+    fn validate(&self) -> Result<bool, ProviderError>;
+    fn fields(self, kind: ProjectionKind) -> Result<Value, ProviderError>;
+}
+/// A record's relationship set; `None` projects no `relationships` key.
+trait Rels: Default + for<'de> Deserialize<'de> {
+    fn validate(&self) -> Result<bool, ProviderError>;
+    fn fields(self) -> Option<Value>;
+}
+impl Attrs for Attributes {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Attributes::validate(self)
+    }
+    fn fields(self, kind: ProjectionKind) -> Result<Value, ProviderError> {
+        Attributes::fields(self, kind)
+    }
+}
+impl Rels for Relationships {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Relationships::validate(self)
+    }
+    fn fields(self) -> Option<Value> {
+        Some(Relationships::fields(self))
+    }
+}
+impl Attrs for Dropped {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
+    fn fields(self, _: ProjectionKind) -> Result<Value, ProviderError> {
+        Ok(json!({}))
+    }
+}
+impl Rels for Dropped {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
+    fn fields(self) -> Option<Value> {
+        None
+    }
+}
+impl Attrs for MediaAttributes {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        if self
+            .created_at
+            .0
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_NAME_BYTES)
+        {
+            return Err(invalid_response());
+        }
+        Ok([&self.caption, &self.title, &self.body]
+            .iter()
+            .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES)))
+    }
+    // Media URLs, file names and dimensions are never read, so they cannot be projected.
+    fn fields(self, _: ProjectionKind) -> Result<Value, ProviderError> {
+        let mut truncated = false;
+        let mut output = json!({});
+        for (key, value) in [
+            ("caption", self.caption.0),
+            ("title", self.title.0),
+            ("body", self.body.0),
+        ] {
+            truncated |= text(&mut output, key, Nullable(value));
+        }
+        output["createdAt"] = json!(self.created_at.0);
+        output["attributesCoverage"] = json!("known-fields-only; media-urls-never-projected");
+        output["textTruncated"] = json!(truncated);
+        Ok(output)
+    }
 }
 
 #[derive(Default)]
@@ -1709,9 +2209,6 @@ impl Attributes {
         ]
         .iter()
         .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
-            || [&self.caption, &self.title, &self.body]
-                .iter()
-                .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
     }
     fn validate(&self) -> Result<bool, ProviderError> {
         for value in [
@@ -1837,23 +2334,8 @@ impl Attributes {
                 output["textTruncated"] = json!(truncated);
                 Ok(output)
             }
-            // Media URLs, file names and dimensions are never read, so they cannot be projected.
-            ProjectionKind::Media => {
-                let mut truncated = false;
-                let mut output = json!({});
-                for (key, value) in [
-                    ("caption", self.caption.0),
-                    ("title", self.title.0),
-                    ("body", self.body.0),
-                ] {
-                    truncated |= text(&mut output, key, Nullable(value));
-                }
-                output["createdAt"] = json!(self.created_at.0);
-                output["attributesCoverage"] =
-                    json!("known-fields-only; media-urls-never-projected");
-                output["textTruncated"] = json!(truncated);
-                Ok(output)
-            }
+            // Media records decode through `MediaAttributes`, never through this set.
+            ProjectionKind::Media => Err(invalid_response()),
             ProjectionKind::Included => {
                 let mut truncated = self.text_truncated();
                 let mut output = json!({});
@@ -2025,23 +2507,24 @@ impl Relationships {
 // Absence avoids constructing the large typed attribute set for minimal records;
 // explicit null still fails the original object-only contract.
 #[derive(Default)]
-struct MissingAttributes(Option<Box<JsonObject<Attributes>>>);
-impl<'de> Deserialize<'de> for MissingAttributes {
+struct MissingAttributes<A>(Option<Box<JsonObject<A>>>);
+impl<'de, A: Attrs> Deserialize<'de> for MissingAttributes<A> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        JsonObject::<Attributes>::deserialize(d).map(|a| Self(Some(Box::new(a))))
+        JsonObject::<A>::deserialize(d).map(|a| Self(Some(Box::new(a))))
     }
 }
 #[derive(Deserialize)]
-struct Resource {
+#[serde(bound = "A: Attrs, R: Rels")]
+struct Resource<A = Attributes, R = Relationships> {
     id: String,
     #[serde(default, rename = "type")]
     kind: Nullable<String>,
     #[serde(default)]
-    attributes: MissingAttributes,
+    attributes: MissingAttributes<A>,
     #[serde(default)]
-    relationships: Nullable<Box<JsonObject<Relationships>>>,
+    relationships: Nullable<Box<JsonObject<R>>>,
 }
-impl Resource {
+impl<A: Attrs, R: Rels> Resource<A, R> {
     fn validate(&self) -> Result<bool, ProviderError> {
         validate_id(&self.id)?;
         if let Some(kind) = &self.kind.0 {
@@ -2094,8 +2577,8 @@ impl Resource {
         if let Some(kind) = self.kind.0 {
             record["type"] = json!(kind);
         }
-        if let Some(r) = self.relationships.0 {
-            record["relationships"] = r.0.fields();
+        if let Some(r) = self.relationships.0.and_then(|r| r.0.fields()) {
+            record["relationships"] = r;
         }
         record["truncated"] = json!(truncated);
         Ok(record)
@@ -2130,24 +2613,27 @@ impl<'de> Deserialize<'de> for Sections {
     }
 }
 #[derive(Deserialize)]
-struct Envelope<T> {
+#[serde(bound = "T: Deserialize<'de>, I: Deserialize<'de>")]
+struct Envelope<T, I> {
     data: T,
     #[serde(default)]
-    included: Nullable<Resources<true>>,
+    included: Nullable<I>,
     #[serde(default)]
     meta: Nullable<JsonObject<Metadata>>,
 }
 
-struct Resources<const INCLUDED: bool = false> {
-    selected: BTreeMap<String, Resource>,
+struct Resources<const INCLUDED: bool = false, A = Attributes, R = Relationships> {
+    selected: BTreeMap<String, Resource<A, R>>,
     total: usize,
     text_truncated: bool,
 }
-impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
+impl<'de, const INCLUDED: bool, A: Attrs, R: Rels> Deserialize<'de> for Resources<INCLUDED, A, R> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ResourcesVisitor<const INCLUDED: bool>;
-        impl<'de, const INCLUDED: bool> Visitor<'de> for ResourcesVisitor<INCLUDED> {
-            type Value = Resources<INCLUDED>;
+        struct ResourcesVisitor<const INCLUDED: bool, A, R>(PhantomData<(A, R)>);
+        impl<'de, const INCLUDED: bool, A: Attrs, R: Rels> Visitor<'de>
+            for ResourcesVisitor<INCLUDED, A, R>
+        {
+            type Value = Resources<INCLUDED, A, R>;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("a resource array")
             }
@@ -2158,7 +2644,9 @@ impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
                     text_truncated: false,
                 };
                 let mut seen = HashSet::new();
-                while let Some(JsonObject(resource)) = seq.next_element::<JsonObject<Resource>>()? {
+                while let Some(JsonObject(resource)) =
+                    seq.next_element::<JsonObject<Resource<A, R>>>()?
+                {
                     result.text_truncated |=
                         resource.validate().map_err(serde::de::Error::custom)?;
                     let key = if INCLUDED {
@@ -2192,23 +2680,38 @@ impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
                 Ok(result)
             }
         }
-        deserializer.deserialize_seq(ResourcesVisitor::<INCLUDED>)
+        deserializer.deserialize_seq(ResourcesVisitor::<INCLUDED, A, R>(PhantomData))
     }
 }
-fn project(
+/// The decoded, typed records of one response, before the shared output bound.
+struct Decoded {
+    records: Vec<Value>,
+    total: usize,
+    text_truncated: bool,
+    included: Vec<Value>,
+    included_total: usize,
+    included_truncated: bool,
+    included_known: bool,
+    sections: Option<usize>,
+}
+/// Decodes records with attribute set `A` and included resources with `IA`/`IR`. Only the decode
+/// is generic; the output bound below is shared by every read.
+fn decode<A: Attrs, IA: Attrs, IR: Rels>(
     body: &[u8],
-    key: &str,
     single: bool,
     kind: ProjectionKind,
-) -> Result<Value, ProviderError> {
-    let (mut records, total, text_truncated, included, meta) = if single {
-        let e: JsonObject<Envelope<JsonObject<Resource>>> =
+) -> Result<Decoded, ProviderError> {
+    type Included<IA, IR> = Resources<true, IA, IR>;
+    type Single<A, IA, IR> = Envelope<JsonObject<Resource<A>>, Included<IA, IR>>;
+    type Many<A, IA, IR> = Envelope<Resources<false, A>, Included<IA, IR>>;
+    let (records, total, text_truncated, included, meta) = if single {
+        let e: JsonObject<Single<A, IA, IR>> =
             serde_json::from_slice(body).map_err(|_| invalid_response())?;
         let r = e.0.data.0;
         let truncated = r.validate()?;
         (vec![r.fields(kind)?], 1, truncated, e.0.included, e.0.meta)
     } else {
-        let e: JsonObject<Envelope<Resources>> =
+        let e: JsonObject<Many<A, IA, IR>> =
             serde_json::from_slice(body).map_err(|_| invalid_response())?;
         (
             e.0.data
@@ -2223,7 +2726,7 @@ fn project(
         )
     };
     let included_known = included.0.is_some();
-    let (mut included, included_total, included_truncated) = match included.0 {
+    let (included, included_total, included_truncated) = match included.0 {
         Some(r) => (
             r.selected
                 .into_values()
@@ -2243,7 +2746,37 @@ fn project(
         ),
         None => (Vec::new(), 0, false),
     };
-    let sections = meta.0.and_then(|m| m.0.sections.0).map(|s| s.0);
+    Ok(Decoded {
+        records,
+        total,
+        text_truncated,
+        included,
+        included_total,
+        included_truncated,
+        included_known,
+        sections: meta.0.and_then(|m| m.0.sections.0).map(|s| s.0),
+    })
+}
+fn project(
+    body: &[u8],
+    key: &str,
+    single: bool,
+    kind: ProjectionKind,
+) -> Result<Value, ProviderError> {
+    let Decoded {
+        mut records,
+        total,
+        text_truncated,
+        mut included,
+        included_total,
+        included_truncated,
+        included_known,
+        sections,
+    } = if matches!(kind, ProjectionKind::Media) {
+        decode::<MediaAttributes, Dropped, Dropped>(body, single, kind)?
+    } else {
+        decode::<Attributes, Attributes, Relationships>(body, single, kind)?
+    };
     let mut output = json!({key:if single { Value::Null } else { json!([]) },
         "included":[], "includedState":if included_known { "present" } else { "null-or-missing" },
         "sectionsCount":sections, "sectionsSchema":"unknown", "projection":"typed-subset",
