@@ -2072,12 +2072,105 @@ struct Attributes {
     start_time: Nullable<serde::de::IgnoredAny>,
     #[serde(default)]
     name: Nullable<String>,
+}
+
+/// Photo, message, album and month-in-review records read only these names. Household attribute
+/// names (`location`, `status`, `name`, ...) are never decoded on them, so an unexpected shape
+/// there cannot fail the read or mark it truncated.
+#[derive(Default, Deserialize)]
+struct MediaAttributes {
+    #[serde(default)]
+    created_at: Nullable<String>,
     #[serde(default)]
     caption: LenientText,
     #[serde(default)]
     title: LenientText,
     #[serde(default)]
     body: LenientText,
+}
+
+/// Included resources of a media read keep only their type and ID, so their attributes and
+/// relationships are skipped unread.
+#[derive(Default)]
+struct Dropped;
+impl<'de> Deserialize<'de> for Dropped {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(d).map(|_| Self)
+    }
+}
+
+/// A record's attribute set: what it validates and how it projects.
+trait Attrs: Default + for<'de> Deserialize<'de> {
+    fn validate(&self) -> Result<bool, ProviderError>;
+    fn fields(self, kind: ProjectionKind) -> Result<Value, ProviderError>;
+}
+/// A record's relationship set; `None` projects no `relationships` key.
+trait Rels: Default + for<'de> Deserialize<'de> {
+    fn validate(&self) -> Result<bool, ProviderError>;
+    fn fields(self) -> Option<Value>;
+}
+impl Attrs for Attributes {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Attributes::validate(self)
+    }
+    fn fields(self, kind: ProjectionKind) -> Result<Value, ProviderError> {
+        Attributes::fields(self, kind)
+    }
+}
+impl Rels for Relationships {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Relationships::validate(self)
+    }
+    fn fields(self) -> Option<Value> {
+        Some(Relationships::fields(self))
+    }
+}
+impl Attrs for Dropped {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
+    fn fields(self, _: ProjectionKind) -> Result<Value, ProviderError> {
+        Ok(json!({}))
+    }
+}
+impl Rels for Dropped {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        Ok(false)
+    }
+    fn fields(self) -> Option<Value> {
+        None
+    }
+}
+impl Attrs for MediaAttributes {
+    fn validate(&self) -> Result<bool, ProviderError> {
+        if self
+            .created_at
+            .0
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_NAME_BYTES)
+        {
+            return Err(invalid_response());
+        }
+        Ok([&self.caption, &self.title, &self.body]
+            .iter()
+            .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES)))
+    }
+    // Media URLs, file names and dimensions are never read, so they cannot be projected.
+    fn fields(self, _: ProjectionKind) -> Result<Value, ProviderError> {
+        let mut truncated = false;
+        let mut output = json!({});
+        for (key, value) in [
+            ("caption", self.caption.0),
+            ("title", self.title.0),
+            ("body", self.body.0),
+        ] {
+            truncated |= text(&mut output, key, Nullable(value));
+        }
+        output["createdAt"] = json!(self.created_at.0);
+        output["attributesCoverage"] = json!("known-fields-only; media-urls-never-projected");
+        output["textTruncated"] = json!(truncated);
+        Ok(output)
+    }
 }
 
 #[derive(Default)]
@@ -2116,9 +2209,6 @@ impl Attributes {
         ]
         .iter()
         .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
-            || [&self.caption, &self.title, &self.body]
-                .iter()
-                .any(|v| v.0.as_ref().is_some_and(|s| s.len() > MAX_NAME_BYTES))
     }
     fn validate(&self) -> Result<bool, ProviderError> {
         for value in [
@@ -2244,23 +2334,8 @@ impl Attributes {
                 output["textTruncated"] = json!(truncated);
                 Ok(output)
             }
-            // Media URLs, file names and dimensions are never read, so they cannot be projected.
-            ProjectionKind::Media => {
-                let mut truncated = false;
-                let mut output = json!({});
-                for (key, value) in [
-                    ("caption", self.caption.0),
-                    ("title", self.title.0),
-                    ("body", self.body.0),
-                ] {
-                    truncated |= text(&mut output, key, Nullable(value));
-                }
-                output["createdAt"] = json!(self.created_at.0);
-                output["attributesCoverage"] =
-                    json!("known-fields-only; media-urls-never-projected");
-                output["textTruncated"] = json!(truncated);
-                Ok(output)
-            }
+            // Media records decode through `MediaAttributes`, never through this set.
+            ProjectionKind::Media => Err(invalid_response()),
             ProjectionKind::Included => {
                 let mut truncated = self.text_truncated();
                 let mut output = json!({});
@@ -2432,23 +2507,24 @@ impl Relationships {
 // Absence avoids constructing the large typed attribute set for minimal records;
 // explicit null still fails the original object-only contract.
 #[derive(Default)]
-struct MissingAttributes(Option<Box<JsonObject<Attributes>>>);
-impl<'de> Deserialize<'de> for MissingAttributes {
+struct MissingAttributes<A>(Option<Box<JsonObject<A>>>);
+impl<'de, A: Attrs> Deserialize<'de> for MissingAttributes<A> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        JsonObject::<Attributes>::deserialize(d).map(|a| Self(Some(Box::new(a))))
+        JsonObject::<A>::deserialize(d).map(|a| Self(Some(Box::new(a))))
     }
 }
 #[derive(Deserialize)]
-struct Resource {
+#[serde(bound = "A: Attrs, R: Rels")]
+struct Resource<A = Attributes, R = Relationships> {
     id: String,
     #[serde(default, rename = "type")]
     kind: Nullable<String>,
     #[serde(default)]
-    attributes: MissingAttributes,
+    attributes: MissingAttributes<A>,
     #[serde(default)]
-    relationships: Nullable<Box<JsonObject<Relationships>>>,
+    relationships: Nullable<Box<JsonObject<R>>>,
 }
-impl Resource {
+impl<A: Attrs, R: Rels> Resource<A, R> {
     fn validate(&self) -> Result<bool, ProviderError> {
         validate_id(&self.id)?;
         if let Some(kind) = &self.kind.0 {
@@ -2501,8 +2577,8 @@ impl Resource {
         if let Some(kind) = self.kind.0 {
             record["type"] = json!(kind);
         }
-        if let Some(r) = self.relationships.0 {
-            record["relationships"] = r.0.fields();
+        if let Some(r) = self.relationships.0.and_then(|r| r.0.fields()) {
+            record["relationships"] = r;
         }
         record["truncated"] = json!(truncated);
         Ok(record)
@@ -2537,24 +2613,27 @@ impl<'de> Deserialize<'de> for Sections {
     }
 }
 #[derive(Deserialize)]
-struct Envelope<T> {
+#[serde(bound = "T: Deserialize<'de>, I: Deserialize<'de>")]
+struct Envelope<T, I> {
     data: T,
     #[serde(default)]
-    included: Nullable<Resources<true>>,
+    included: Nullable<I>,
     #[serde(default)]
     meta: Nullable<JsonObject<Metadata>>,
 }
 
-struct Resources<const INCLUDED: bool = false> {
-    selected: BTreeMap<String, Resource>,
+struct Resources<const INCLUDED: bool = false, A = Attributes, R = Relationships> {
+    selected: BTreeMap<String, Resource<A, R>>,
     total: usize,
     text_truncated: bool,
 }
-impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
+impl<'de, const INCLUDED: bool, A: Attrs, R: Rels> Deserialize<'de> for Resources<INCLUDED, A, R> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ResourcesVisitor<const INCLUDED: bool>;
-        impl<'de, const INCLUDED: bool> Visitor<'de> for ResourcesVisitor<INCLUDED> {
-            type Value = Resources<INCLUDED>;
+        struct ResourcesVisitor<const INCLUDED: bool, A, R>(PhantomData<(A, R)>);
+        impl<'de, const INCLUDED: bool, A: Attrs, R: Rels> Visitor<'de>
+            for ResourcesVisitor<INCLUDED, A, R>
+        {
+            type Value = Resources<INCLUDED, A, R>;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("a resource array")
             }
@@ -2565,7 +2644,9 @@ impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
                     text_truncated: false,
                 };
                 let mut seen = HashSet::new();
-                while let Some(JsonObject(resource)) = seq.next_element::<JsonObject<Resource>>()? {
+                while let Some(JsonObject(resource)) =
+                    seq.next_element::<JsonObject<Resource<A, R>>>()?
+                {
                     result.text_truncated |=
                         resource.validate().map_err(serde::de::Error::custom)?;
                     let key = if INCLUDED {
@@ -2599,23 +2680,38 @@ impl<'de, const INCLUDED: bool> Deserialize<'de> for Resources<INCLUDED> {
                 Ok(result)
             }
         }
-        deserializer.deserialize_seq(ResourcesVisitor::<INCLUDED>)
+        deserializer.deserialize_seq(ResourcesVisitor::<INCLUDED, A, R>(PhantomData))
     }
 }
-fn project(
+/// The decoded, typed records of one response, before the shared output bound.
+struct Decoded {
+    records: Vec<Value>,
+    total: usize,
+    text_truncated: bool,
+    included: Vec<Value>,
+    included_total: usize,
+    included_truncated: bool,
+    included_known: bool,
+    sections: Option<usize>,
+}
+/// Decodes records with attribute set `A` and included resources with `IA`/`IR`. Only the decode
+/// is generic; the output bound below is shared by every read.
+fn decode<A: Attrs, IA: Attrs, IR: Rels>(
     body: &[u8],
-    key: &str,
     single: bool,
     kind: ProjectionKind,
-) -> Result<Value, ProviderError> {
-    let (mut records, total, text_truncated, included, meta) = if single {
-        let e: JsonObject<Envelope<JsonObject<Resource>>> =
+) -> Result<Decoded, ProviderError> {
+    type Included<IA, IR> = Resources<true, IA, IR>;
+    type Single<A, IA, IR> = Envelope<JsonObject<Resource<A>>, Included<IA, IR>>;
+    type Many<A, IA, IR> = Envelope<Resources<false, A>, Included<IA, IR>>;
+    let (records, total, text_truncated, included, meta) = if single {
+        let e: JsonObject<Single<A, IA, IR>> =
             serde_json::from_slice(body).map_err(|_| invalid_response())?;
         let r = e.0.data.0;
         let truncated = r.validate()?;
         (vec![r.fields(kind)?], 1, truncated, e.0.included, e.0.meta)
     } else {
-        let e: JsonObject<Envelope<Resources>> =
+        let e: JsonObject<Many<A, IA, IR>> =
             serde_json::from_slice(body).map_err(|_| invalid_response())?;
         (
             e.0.data
@@ -2630,7 +2726,7 @@ fn project(
         )
     };
     let included_known = included.0.is_some();
-    let (mut included, included_total, included_truncated) = match included.0 {
+    let (included, included_total, included_truncated) = match included.0 {
         Some(r) => (
             r.selected
                 .into_values()
@@ -2650,7 +2746,37 @@ fn project(
         ),
         None => (Vec::new(), 0, false),
     };
-    let sections = meta.0.and_then(|m| m.0.sections.0).map(|s| s.0);
+    Ok(Decoded {
+        records,
+        total,
+        text_truncated,
+        included,
+        included_total,
+        included_truncated,
+        included_known,
+        sections: meta.0.and_then(|m| m.0.sections.0).map(|s| s.0),
+    })
+}
+fn project(
+    body: &[u8],
+    key: &str,
+    single: bool,
+    kind: ProjectionKind,
+) -> Result<Value, ProviderError> {
+    let Decoded {
+        mut records,
+        total,
+        text_truncated,
+        mut included,
+        included_total,
+        included_truncated,
+        included_known,
+        sections,
+    } = if matches!(kind, ProjectionKind::Media) {
+        decode::<MediaAttributes, Dropped, Dropped>(body, single, kind)?
+    } else {
+        decode::<Attributes, Attributes, Relationships>(body, single, kind)?
+    };
     let mut output = json!({key:if single { Value::Null } else { json!([]) },
         "included":[], "includedState":if included_known { "present" } else { "null-or-missing" },
         "sectionsCount":sections, "sectionsSchema":"unknown", "projection":"typed-subset",

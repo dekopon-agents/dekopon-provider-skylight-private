@@ -2284,6 +2284,49 @@ fn truncated_media_text_marks_the_record_and_the_output_truncated() {
 }
 
 #[test]
+fn media_records_never_decode_household_attribute_names() {
+    let long = "x".repeat(MAX_NAME_BYTES + 1);
+    // Shapes a household record would refuse: they are never read on a media record.
+    let record = json!({"id": "message-1", "type": "message", "attributes": {
+        "caption": "Beach",
+        "location": {"lat": "location-sentinel"},
+        "position": "3",
+        "status": 1,
+        "name": {"first": "name-sentinel"},
+        "rrule": "not-an-array",
+        "starts_at": long,
+        "description": long,
+        "label": long
+    }});
+    // An included category whose long label the identity projection drops.
+    let included = json!([{"type": "category", "id": "category-7", "attributes": {"label": long, "position": "x"}, "relationships": {"list": {"data": "not-a-link"}}}]);
+    for read in MEDIA_READS {
+        let single = matches!(read, Read::Message | Read::MonthInReview);
+        let data = if single {
+            record.clone()
+        } else {
+            json!([record])
+        };
+        let output = invoke(read, json!({"data": data, "included": included}))
+            .unwrap_or_else(|error| panic!("{read:?}: {error:?}"));
+        let rendered = output.to_string();
+        assert_eq!(output["truncated"], false, "{read:?}: {rendered}");
+        assert!(rendered.contains("Beach"), "{read:?}");
+        assert!(rendered.contains("\"textTruncated\":false"), "{read:?}");
+        assert!(!rendered.contains("name-sentinel"), "{read:?}");
+        assert!(!rendered.contains("location-sentinel"), "{read:?}");
+    }
+    // Household records no longer count media text toward truncation.
+    let lists = invoke(
+        Read::Lists,
+        json!({"data": [{"id": "list-1", "attributes": {"label": "Groceries", "caption": long, "title": long, "body": long}}]}),
+    )
+    .unwrap();
+    assert_eq!(lists["lists"][0]["textTruncated"], false);
+    assert_eq!(lists["truncated"], false);
+}
+
+#[test]
 fn each_task_write_sends_one_request_with_its_exact_method_uri_headers_and_json_body() {
     let base = "https://app.ourskylight.com/api/frames/frame-test/chores";
     let cases: [(Mutation, Value, &str, String, &[u8]); 6] = [

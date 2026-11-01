@@ -185,8 +185,11 @@ documented, so each is projected through the same JSON:API envelope as the other
   the source gives a string. Those three names are the ones pyskylight's message, album and comment
   write bodies use.
 - Every other attribute is never read. That covers asset, thumbnail and share URLs, file names,
-  dimensions, links and pagination tokens, so no media URL can reach the output.
-- Included resources keep only their type and ID.
+  dimensions, links and pagination tokens, so no media URL can reach the output. It also covers
+  household attribute names such as `location`, `status` or `name`, so an unexpected value there
+  neither fails the read nor marks it truncated.
+- Included resources keep only their type and ID. Their attributes and relationships are skipped
+  unread.
 - `messages` sends no `page` or `page_token`, so only the first page is read, and pagination is
   never followed.
 - A response that is not that envelope is `invalid-response`.
